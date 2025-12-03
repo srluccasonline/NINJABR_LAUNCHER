@@ -4,7 +4,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { anonymizeProxy } from 'proxy-chain';
 
-// FLAGS (Mantidas)
+// =============================================================================
+// FLAGS DE GUERRA (Anti-Detecção)
+// =============================================================================
 app.commandLine.appendSwitch('disable-dev-shm-usage');
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('disable-quic');
@@ -22,7 +24,8 @@ const API_URL = "https://nvukznijjllgyuyrswhy.supabase.co/functions/v1/app-manag
 const ENCRYPTION_KEY = crypto.scryptSync('SuaSenhaSuperSecretaDoNinja', 'salt', 32);
 const IV_LENGTH = 16;
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.177 Safari/537.36';
+// USER AGENT HARDCODED (O MESMO DO PRELOAD)
+const HARDCODED_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.177 Safari/537.36';
 
 function encrypt(text: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
@@ -51,7 +54,7 @@ const createWindow = () => {
     width: 1200, height: 800, title: "Ninja Browser Manager",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
-      nodeIntegration: false, contextIsolation: true,
+      nodeIntegration: false, contextIsolation: true, // Painel seguro
       partition: 'persist:admin_panel' 
     },
     autoHideMenuBar: true,
@@ -84,34 +87,31 @@ app.on("ready", () => {
       const partitionName = `persist:app_${appId}`;
       const appSession = session.fromPartition(partitionName);
 
-      // HEADERS
-      appSession.setUserAgent(USER_AGENT);
+      // --- CONFIGURAR UA E HEADERS ---
+      appSession.setUserAgent(HARDCODED_UA);
       appSession.webRequest.onBeforeSendHeaders((details, cb) => {
         const h = details.requestHeaders;
-        delete h['Sec-CH-UA'];
-        delete h['Sec-CH-UA-Mobile'];
-        delete h['Sec-CH-UA-Platform'];
-        
-        h['User-Agent'] = USER_AGENT;
+        h['User-Agent'] = HARDCODED_UA;
         h['sec-ch-ua-platform'] = '"Windows"';
         h['sec-ch-ua-platform-version'] = '"10.0.0"';
         h['sec-ch-ua'] = '"Not)A;Brand";v="99", "Google Chrome";v="142", "Chromium";v="142"';
         h['sec-ch-ua-full-version-list'] = '"Not)A;Brand";v="99.0.0.0", "Google Chrome";v="142.0.7444.177", "Chromium";v="142.0.7444.177"';
         h['sec-ch-ua-mobile'] = '?0';
+        h['sec-ch-ua-arch'] = '"x86"';
+        h['sec-ch-ua-bitness'] = '"64"';
         cb({ requestHeaders: h });
       });
 
       appSession.setCertificateVerifyProc((request, callback) => { callback(0); });
 
       const appWindow = new BrowserWindow({
-        width: 1920, height: 1080, // [CORREÇÃO VIEWPORT] HD Standard
-        title: app_config.name, 
+        width: 1024, height: 768, title: app_config.name, 
         backgroundColor: '#ffffff',
         webPreferences: { 
             preload: path.join(__dirname, "preload.js"), 
             session: appSession, 
             nodeIntegration: false, 
-            contextIsolation: false, 
+            contextIsolation: false, // Stealth precisa disso
             sandbox: false, 
             devTools: false 
         },
@@ -120,7 +120,7 @@ app.on("ready", () => {
       appWindow.setMenuBarVisibility(false);
       appWindow.webContents.on('context-menu', (e) => e.preventDefault());
 
-      // PROXY CHAIN
+      // --- REDE (PROXY) ---
       if (network.proxy && network.proxy.host) {
         const protocol = network.proxy.protocol === 'socks5' ? 'socks5' : 'http';
         let upstreamUrl = `${protocol}://${network.proxy.host}:${network.proxy.port}`;
@@ -134,7 +134,7 @@ app.on("ready", () => {
         await appSession.setProxy({ proxyRules: 'direct://' });
       }
 
-      // RESTORE
+      // --- RESTORE DATA ---
       let savedLocalStorage = {}; 
       let needToInjectLS = false;
       if (sessionInfo && sessionInfo.download_url) {
@@ -158,30 +158,48 @@ app.on("ready", () => {
         } catch (e) { console.error("Restore error", e); }
       }
 
-      // INJECTION
+      // --- INJEÇÃO (AUTOFILL INTELIGENTE + LS) ---
       let hasInjected = false;
       appWindow.webContents.on('did-finish-load', async () => {
          const currentURL = appWindow.webContents.getURL();
          if (currentURL.startsWith('data:')) return; 
 
          if (!hasInjected) {
-             // Autofill
+             // AUTOFILL SCRIPT (Loop Inteligente)
              if (credentials && credentials.username) {
                  const scriptFill = `(function(){
                     const u='${credentials.username}'; const p='${credentials.password}';
-                    const sU='${credentials.usernameSelector||''}'; const sP='${credentials.passwordSelector||''}';
+                    
                     function fill() {
-                        let iU = sU ? document.querySelector(sU) : document.querySelector('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"]');
-                        let iP = sP ? document.querySelector(sP) : document.querySelector('input[type="password"]');
-                        const dispatch = (el) => ['click','focus','input','change','blur'].forEach(e => el.dispatchEvent(new Event(e, {bubbles:true})));
-                        if(iU && !iU.value && iU.offsetParent) { iU.value=u; dispatch(iU); }
-                        if(iP && !iP.value && iP.offsetParent) { iP.value=p; dispatch(iP); }
+                        // Seletor genérico amplo
+                        let iU = document.querySelector('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"], input[id*="user"], input[id*="email"]');
+                        let iP = document.querySelector('input[type="password"]');
+                        
+                        const dispatch = (el) => {
+                            el.dispatchEvent(new Event('click', {bubbles:true}));
+                            el.dispatchEvent(new Event('focus', {bubbles:true}));
+                            el.dispatchEvent(new Event('input', {bubbles:true}));
+                            el.dispatchEvent(new Event('change', {bubbles:true}));
+                            el.dispatchEvent(new Event('blur', {bubbles:true}));
+                        };
+
+                        if(iU && !iU.value && iU.offsetParent) { 
+                            console.log("Ninja: Preenchendo Usuario");
+                            iU.value=u; dispatch(iU); 
+                        }
+                        if(iP && !iP.value && iP.offsetParent) { 
+                            console.log("Ninja: Preenchendo Senha");
+                            iP.value=p; dispatch(iP); 
+                        }
                     }
-                    let c=0; const i = setInterval(() => { fill(); c++; if(c>15) clearInterval(i); }, 1000);
+                    
+                    // Roda a cada 1.5 segundos ETERNAMENTE (assim se o user deslogar, preenche de novo)
+                    setInterval(fill, 1500);
                  })();`;
                  appWindow.webContents.executeJavaScript(scriptFill).catch(()=>{});
              }
-             // LS Restore
+
+             // LS RESTORE
              if (needToInjectLS) {
                  const scriptLS = Object.entries(savedLocalStorage).map(([k,v]) => `localStorage.setItem('${k}','${String(v).replace(/'/g,"\\'")}');`).join(' ');
                  await appWindow.webContents.executeJavaScript(scriptLS).catch(()=>{});
@@ -215,7 +233,6 @@ app.on("ready", () => {
               await appSession.clearStorageData();
           } catch(e) { console.error("Save error", e); }
           finally {
-              if (localProxyUrl) { /* ... */ }
               if(mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app-closed", appId);
               appWindow.destroy();
           }
