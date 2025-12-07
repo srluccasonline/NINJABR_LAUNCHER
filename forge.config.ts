@@ -7,7 +7,26 @@ import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+import fs from 'fs';
+import path from 'path';
+
 const config: ForgeConfig = {
+  hooks: {
+    packageAfterPrune: async (_config, buildPath) => {
+      const modulesToCopy = ['patchright', 'patchright-core'];
+      for (const moduleName of modulesToCopy) {
+        const src = path.resolve(__dirname, 'node_modules', moduleName);
+        const dest = path.join(buildPath, 'node_modules', moduleName);
+
+        if (fs.existsSync(src)) {
+          console.log(`[HOOK] Copying ${moduleName} to build...`);
+          await fs.promises.cp(src, dest, { recursive: true });
+        } else {
+          console.warn(`[HOOK] Could not find ${moduleName} to copy.`);
+        }
+      }
+    }
+  },
   packagerConfig: {
     icon: 'imgs/icon', // Verifique se o ícone existe
     // 1. COPIA O CHROMIUM BAIXADO
