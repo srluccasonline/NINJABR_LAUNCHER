@@ -3,6 +3,16 @@ import { chromium } from 'patchright';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
+// --- CONFIGURAÇÃO CRÍTICA DO PATH DO BROWSER ---
+if (app.isPackaged) {
+  // PRODUÇÃO: Procura dentro de resources/browsers dentro do .exe instalado
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'browsers');
+} else {
+  // DESENVOLVIMENTO: Procura na pasta browsers na raiz do projeto
+  // O main.ts roda de .vite/build, então voltamos 2 pastas
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(__dirname, '../../browsers');
+}
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();
@@ -11,7 +21,6 @@ if (started) {
 let mainWindow: BrowserWindow | null = null;
 
 const createWindow = () => {
-  // Create the browser window.
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
@@ -24,9 +33,6 @@ const createWindow = () => {
   mainWindow.loadURL("https://ninjabrfull.vercel.app");
 };
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
 app.on('ready', () => {
   createWindow();
 
@@ -39,7 +45,7 @@ app.on('ready', () => {
         login: USER_EMAIL,
         password: USER_PASSWORD,
         proxy_data,
-        session_data: SESSION_DATA, // Receber dados da sessão em memória
+        session_data: SESSION_DATA,
         is_autofill_enabled
       } = args;
 
@@ -54,13 +60,19 @@ app.on('ready', () => {
       }
 
       // Configurar User Agent
-      const userAgent = proxy_data?.user_agents?.ua_string || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
+      const userAgent = proxy_data?.user_agents?.ua_string || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-      const browser = await chromium.launch({ headless: false });
+      // --- LANÇAR NAVEGADOR ---
+      // O patchright vai ler a env var PLAYWRIGHT_BROWSERS_PATH que definimos no topo
+      const browser = await chromium.launch({
+        headless: false,
+        // args: ['--no-sandbox'] // Opcional: as vezes ajuda no ambiente empacotado, mas tente sem primeiro
+      });
 
       // --- CONFIGURAÇÃO DE CONTEXTO ---
       const contextOptions: any = {
-        channel: 'chrome',
+        // REMOVIDO: channel: 'chrome' -> Isso forçava buscar o Chrome instalado no Windows. 
+        // Agora ele usa o Chromium da pasta local.
         userAgent: userAgent,
         proxy: proxyConfig,
         ignoreHTTPSErrors: true
@@ -70,7 +82,6 @@ app.on('ready', () => {
       if (SESSION_DATA) {
         console.log(`📂 Carregando sessão da memória...`);
         try {
-          // Se for string, faz parse. Se já for objeto, usa direto.
           const storageState = typeof SESSION_DATA === 'string' ? JSON.parse(SESSION_DATA) : SESSION_DATA;
           contextOptions.storageState = storageState;
         } catch (e) {
@@ -83,10 +94,8 @@ app.on('ready', () => {
       const context = await browser.newContext(contextOptions);
       const page = await context.newPage();
 
-      // Variável para armazenar a sessão capturada
       let capturedSession: any = null;
 
-      // --- FUNÇÃO AUXILIAR PARA CAPTURAR SESSÃO (EM MEMÓRIA) ---
       const captureSession = async () => {
         try {
           capturedSession = await context.storageState();
@@ -115,8 +124,7 @@ app.on('ready', () => {
       console.log(`Navegando para ${TARGET_URL}...`);
       await page.goto(TARGET_URL);
 
-      // Loop de monitoramento (executando em background sem travar o main process)
-      // Nota: O loop agora serve apenas para o auto-login e detectar fechamento
+      // --- LOOP DE MONITORAMENTO ---
       await new Promise<void>(async (resolve) => {
         const LOGIN_INDICATORS = 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]';
 
@@ -126,9 +134,6 @@ app.on('ready', () => {
           try {
             if (page.isClosed()) break;
 
-            // REMOVIDO: Auto-save periódico de 5s
-
-            // 2. MONITORAMENTO DE LOGIN (Apenas se autofill estiver habilitado e houver credenciais)
             if (is_autofill_enabled && USER_EMAIL && USER_PASSWORD) {
               const isLoginVisible = await page.isVisible(LOGIN_INDICATORS, { timeout: 1000 }).catch(() => false);
               const isPasswordVisible = await page.isVisible('input[type="password"]', { timeout: 500 }).catch(() => false);
@@ -136,7 +141,6 @@ app.on('ready', () => {
               if (isLoginVisible || isPasswordVisible) {
                 console.log("⚠️ Detectado Login Necessário...");
 
-                // --- LÓGICA DE PREENCHIMENTO ---
                 const userField = await page.$(LOGIN_INDICATORS);
                 if (userField && await userField.isVisible()) {
                   const currentValue = await userField.inputValue();
@@ -163,7 +167,6 @@ app.on('ready', () => {
 
                     await page.waitForTimeout(8000);
 
-                    // Salvar sessão APÓS login (Uma vez)
                     await captureSession();
                     console.log("✅ Login feito e Sessão Capturada.");
                   }
@@ -186,7 +189,6 @@ app.on('ready', () => {
         }
       });
 
-      // Retornar a sessão capturada para o front/main process
       return { success: true, session_data: capturedSession };
 
     } catch (error: any) {
@@ -196,9 +198,6 @@ app.on('ready', () => {
   });
 });
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -206,12 +205,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  // On OS X it's common to re-create a window in the app when the
-  // dock icon is clicked and there are no other windows open.
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }
 });
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and import them here.
