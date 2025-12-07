@@ -10,7 +10,10 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     icon: 'imgs/icon',
-    asar: true,
+    asar: {
+      unpack: '*.{node,dll}',
+      unpackDir: '**/node_modules/patchright',
+    },
   },
   rebuildConfig: {},
   makers: [
