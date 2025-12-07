@@ -8,21 +8,20 @@ if (started) {
   app.quit();
 }
 
+let mainWindow: BrowserWindow | null = null;
+
 const createWindow = () => {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
 
   mainWindow.loadURL("https://ninjabrfull.vercel.app");
-
-
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
 };
 
 // This method will be called when Electron has finished
@@ -61,6 +60,7 @@ app.on('ready', () => {
 
       // --- CONFIGURAÇÃO DE CONTEXTO ---
       const contextOptions: any = {
+        channel: 'chrome',
         userAgent: userAgent,
         proxy: proxyConfig,
         ignoreHTTPSErrors: true
@@ -181,6 +181,9 @@ app.on('ready', () => {
           }
         }
         resolve();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("app-closed", args.id);
+        }
       });
 
       // Retornar a sessão capturada para o front/main process
