@@ -17,7 +17,7 @@ const config: ForgeConfig = {
     // 2. TIRA O PATCHRIGHT DE DENTRO DO ARQUIVO COMPRIMIDO (ASAR)
     asar: {
       unpack: '*.{node,dll}',
-      unpackDir: '{**/node_modules/patchright/**,**/node_modules/playwright-core/**}',
+      unpackDir: '{**/node_modules/patchright/**,**/node_modules/patchright-core/**}',
     },
   },
   rebuildConfig: {},

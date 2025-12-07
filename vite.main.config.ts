@@ -5,7 +5,7 @@ export default defineConfig({
     build: {
         rollupOptions: {
             // Adicionei playwright-core por segurança
-            external: ['patchright', 'playwright-core'],
+            external: ['patchright', 'patchright-core'],
         },
     },
 });
