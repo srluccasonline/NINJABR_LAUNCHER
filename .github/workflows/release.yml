@@ -20,11 +20,11 @@ jobs:
           - os: windows-latest
             name: Windows
             
-          # 2. Mac Intel (Garante que o Chromium baixado seja Intel)
-          - os: macos-13 
+          # 2. Mac Intel (CORRIGIDO: Agora usa a nova imagem Intel do macOS 15)
+          - os: macos-15-intel
             name: macOS Intel
             
-          # 3. Mac ARM/M1 (Garante que o Chromium baixado seja ARM)
+          # 3. Mac ARM/M1/M2 (macos-latest agora é sempre ARM por padrão)
           - os: macos-latest
             name: macOS ARM
 
@@ -38,9 +38,8 @@ jobs:
           node-version: 20
 
       - name: Install Dependencies
-        # Aqui a mágica acontece: 
-        # No 'macos-13' ele baixa Chromium Intel. 
-        # No 'macos-latest' ele baixa Chromium ARM.
+        # Ao rodar no macos-15-intel, o Patchright baixa o Chromium Intel.
+        # Ao rodar no macos-latest (ARM), ele baixa o Chromium ARM.
         run: npm install
 
       - name: Build & Publish
