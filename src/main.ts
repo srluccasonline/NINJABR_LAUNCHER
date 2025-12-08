@@ -24,6 +24,13 @@ const createWindow = () => {
       contextIsolation: true,
     },
   });
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+      event.preventDefault();
+    }
+  });
+
   mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 
@@ -83,6 +90,16 @@ app.on('ready', () => {
       }
 
       const context = await browser.newContext(contextOptions);
+
+      // Bloquear atalho do DevTools (Ctrl+Shift+I) nas páginas do navegador lançado
+      await context.addInitScript(() => {
+        window.addEventListener('keydown', (event) => {
+          if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'i') {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }, true);
+      });
 
       // =================================================================
       // --- SEGURANÇA MÁXIMA (CDP LEVEL) ---
