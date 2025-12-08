@@ -3,17 +3,30 @@ name: Build & Publish
 on:
   push:
     tags:
-      - 'v*' # Dispara ao subir tags (v1.0.0, v1.0.1, etc)
+      - 'v*'
 
 permissions:
-  contents: write # Permissão OBRIGATÓRIA para subir os arquivos na Release
+  contents: write
 
 jobs:
   publish:
+    name: Build on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          # 1. Windows (x64)
+          - os: windows-latest
+            name: Windows
+            
+          # 2. Mac Intel (Garante que o Chromium baixado seja Intel)
+          - os: macos-13 
+            name: macOS Intel
+            
+          # 3. Mac ARM/M1 (Garante que o Chromium baixado seja ARM)
+          - os: macos-latest
+            name: macOS ARM
 
     steps:
       - name: Checkout Code
@@ -25,12 +38,12 @@ jobs:
           node-version: 20
 
       - name: Install Dependencies
-        # Ao rodar isso, seu script "postinstall" do package.json 
-        # vai baixar o Chromium automaticamente para a pasta ./browsers
+        # Aqui a mágica acontece: 
+        # No 'macos-13' ele baixa Chromium Intel. 
+        # No 'macos-latest' ele baixa Chromium ARM.
         run: npm install
 
       - name: Build & Publish
-        # O GITHUB_TOKEN é injetado automaticamente, não precisa configurar nada manual
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run publish
