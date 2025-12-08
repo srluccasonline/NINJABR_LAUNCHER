@@ -3,20 +3,13 @@ import { chromium } from 'patchright';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
-// --- CONFIGURAÇÃO CRÍTICA DO PATH DO BROWSER ---
 if (app.isPackaged) {
-  // PRODUÇÃO: Procura dentro de resources/browsers dentro do .exe instalado
   process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'browsers');
 } else {
-  // DESENVOLVIMENTO: Procura na pasta browsers na raiz do projeto
-  // O main.ts roda de .vite/build, então voltamos 2 pastas
   process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(__dirname, '../../browsers');
 }
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (started) {
-  app.quit();
-}
+if (started) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -27,17 +20,21 @@ const createWindow = () => {
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
-
-  mainWindow.loadURL("https://ninjabrfull.vercel.app");
+  mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 
 app.on('ready', () => {
   createWindow();
 
   ipcMain.handle('launch-app', async (event, args) => {
-    console.log("📥 [IPC] launch-app received:", args);
+    console.log("📥 [IPC] launch-app:", args.name);
+
+    // Controle do Intervalo de Segurança
+    let securityInterval: NodeJS.Timeout | null = null;
 
     try {
       const {
@@ -45,11 +42,16 @@ app.on('ready', () => {
         login: USER_EMAIL,
         password: USER_PASSWORD,
         proxy_data,
-        session_data: SESSION_DATA,
-        is_autofill_enabled
+        session_data: SESSION_FILE_CONTENT,
+        is_autofill_enabled,
+        ublock_rules,
+        url_blocks,
+        save_strategy = 'never',
+        login_selector,
+        password_selector
       } = args;
 
-      // Configurar Proxy
+      // 1. Proxy
       let proxyConfig = undefined;
       if (proxy_data) {
         proxyConfig = {
@@ -59,153 +61,197 @@ app.on('ready', () => {
         };
       }
 
-      // Configurar User Agent
-      const userAgent = proxy_data?.user_agents?.ua_string || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+      // 2. LANÇAR NAVEGADOR
+      const browser = await chromium.launch({ headless: false });
 
-      // --- LANÇAR NAVEGADOR ---
-      // O patchright vai ler a env var PLAYWRIGHT_BROWSERS_PATH que definimos no topo
-      const browser = await chromium.launch({
-        headless: false,
-        // args: ['--no-sandbox'] // Opcional: as vezes ajuda no ambiente empacotado, mas tente sem primeiro
-      });
-
-      // --- CONFIGURAÇÃO DE CONTEXTO ---
+      // 3. CONTEXTO
       const contextOptions: any = {
-        // REMOVIDO: channel: 'chrome' -> Isso forçava buscar o Chrome instalado no Windows. 
-        // Agora ele usa o Chromium da pasta local.
-        userAgent: userAgent,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
         proxy: proxyConfig,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        viewport: null
       };
 
-      // Carregar sessão da memória se existir
-      if (SESSION_DATA) {
-        console.log(`📂 Carregando sessão da memória...`);
+      // 4. Carregar Sessão
+      if (SESSION_FILE_CONTENT) {
+        console.log(`📂 Sessão encontrada.`);
         try {
-          const storageState = typeof SESSION_DATA === 'string' ? JSON.parse(SESSION_DATA) : SESSION_DATA;
-          contextOptions.storageState = storageState;
-        } catch (e) {
-          console.error("Erro ao fazer parse da sessão:", e);
-        }
-      } else {
-        console.log('📂 Iniciando sem sessão prévia.');
+          let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
+          if (storageState.session_data) storageState = storageState.session_data;
+          if (storageState.cookies || storageState.origins) contextOptions.storageState = storageState;
+        } catch (e) { console.error("❌ Erro sessão:", e); }
       }
 
       const context = await browser.newContext(contextOptions);
-      const page = await context.newPage();
 
-      let capturedSession: any = null;
+      // =================================================================
+      // --- SEGURANÇA MÁXIMA (CDP LEVEL) ---
+      // =================================================================
 
-      const captureSession = async () => {
-        try {
-          capturedSession = await context.storageState();
-          console.log("💾 Sessão capturada em memória.");
-        } catch (error: any) {
-          if (!error.message.includes('Target closed') && !error.message.includes('closed')) {
-            console.error('Erro ao capturar sessão:', error.message);
-          }
+      const isUrlForbidden = (url: string) => {
+        const u = url.toLowerCase();
+        if (u.startsWith('chrome://')) {
+          // Permite apenas downloads e print
+          if (u.startsWith('chrome://downloads') || u.startsWith('chrome://print')) return false;
+          return true; // Bloqueia todo o resto
         }
+        if (u.startsWith('devtools://')) return true;
+        return false;
       };
 
-      // --- 🛡️ PROTEÇÃO VISUAL ---
-      await page.addInitScript(() => {
+      try {
+        const client = await browser.newBrowserCDPSession();
+        await client.send('Target.setDiscoverTargets', { discover: true });
+
+        const closeTarget = async (targetId: string, url: string) => {
+          console.log(`🚫 [CDP] Bloqueando Target: ${url}`);
+          try {
+            await client.send('Target.closeTarget', { targetId });
+          } catch (e) {
+            // Target pode já ter fechado
+          }
+        };
+
+        client.on('Target.targetCreated', async ({ targetInfo }) => {
+          if (isUrlForbidden(targetInfo.url)) {
+            await closeTarget(targetInfo.targetId, targetInfo.url);
+          }
+        });
+
+        client.on('Target.targetInfoChanged', async ({ targetInfo }) => {
+          if (isUrlForbidden(targetInfo.url)) {
+            await closeTarget(targetInfo.targetId, targetInfo.url);
+          }
+        });
+
+        console.log("🛡️ Segurança CDP Ativada");
+
+      } catch (e) {
+        console.error("❌ Falha ao iniciar CDP:", e);
+      }
+
+      // Mantém o handler de página apenas para interceptação de rede (WebStore)
+      // e como fallback secundário
+      const handlePage = async (p: any) => {
+        try {
+          await p.route('**chromewebstore.google.com**', (route: any) => route.abort());
+
+          // Fallback visual (caso o CDP falhe por algum motivo)
+          if (isUrlForbidden(p.url())) await p.close().catch(() => { });
+          p.on('framenavigated', (f: any) => {
+            if (isUrlForbidden(f.url())) p.close().catch(() => { });
+          });
+
+        } catch (e) { }
+      };
+
+      context.on('page', handlePage);
+      context.pages().forEach(handlePage);
+
+
+
+      // Bloqueio de URLs do usuário
+      if (url_blocks && typeof url_blocks === 'string') {
+        const urls = url_blocks.split('\n').map(u => u.trim()).filter(u => u);
+        for (const u of urls) {
+          const pattern = u.includes('*') ? u : `*${u}*`;
+          await context.route(pattern, r => r.abort());
+        }
+      }
+
+      // =================================================================
+
+      const page = await context.newPage();
+
+      // CSS Injection (uBlock + Senha)
+      await page.addInitScript(({ rules }) => {
+        let css = `input[type="password"] { -webkit-text-security: disc !important; user-select: none !important; filter: blur(2px); }`;
+        if (rules) css += ` ${rules} { display: none !important; opacity: 0 !important; }`;
         const style = document.createElement('style');
-        style.innerHTML = `
-            input[type="email"], input[type="text"], input[name*="user"], input[name*="login"], input[name*="identifier"] {
-                -webkit-text-security: disc !important; filter: blur(3px);
-            }
-            input[type="password"] { user-select: none !important; }
-        `;
+        style.innerHTML = css;
         document.head.appendChild(style);
-        document.addEventListener('copy', (e) => e.preventDefault(), true);
-        document.addEventListener('contextmenu', (e) => e.preventDefault(), true);
-      });
+        document.addEventListener('copy', (e: any) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
+      }, { rules: (ublock_rules && typeof ublock_rules === 'string') ? ublock_rules.split('\n').join(', ') : '' });
+
 
       console.log(`Navegando para ${TARGET_URL}...`);
       await page.goto(TARGET_URL);
 
+      await page.waitForTimeout(3000);
+
+      let finalSessionData: any = null;
+      let hasLoggedIn = false;
+
       // --- LOOP DE MONITORAMENTO ---
       await new Promise<void>(async (resolve) => {
-        const LOGIN_INDICATORS = 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]';
-
-        console.log("🟢 MONITORAMENTO ATIVO: Aguardando login ou fechamento...");
+        const selUser = login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]';
+        const selPass = password_selector || 'input[type="password"]';
+        const selBtn = `button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext`;
 
         while (true) {
           try {
             if (page.isClosed()) break;
 
-            if (is_autofill_enabled && USER_EMAIL && USER_PASSWORD) {
-              const isLoginVisible = await page.isVisible(LOGIN_INDICATORS, { timeout: 1000 }).catch(() => false);
-              const isPasswordVisible = await page.isVisible('input[type="password"]', { timeout: 500 }).catch(() => false);
+            if (is_autofill_enabled && USER_EMAIL && USER_PASSWORD && !hasLoggedIn) {
+              const isUserVis = await page.isVisible(selUser, { timeout: 500 }).catch(() => false);
+              const isPassVis = await page.isVisible(selPass, { timeout: 500 }).catch(() => false);
 
-              if (isLoginVisible || isPasswordVisible) {
-                console.log("⚠️ Detectado Login Necessário...");
-
-                const userField = await page.$(LOGIN_INDICATORS);
-                if (userField && await userField.isVisible()) {
-                  const currentValue = await userField.inputValue();
-                  if (currentValue !== USER_EMAIL) await userField.fill(USER_EMAIL);
-                }
-
-                let passField = await page.$('input[type="password"]');
-                if (!passField || !(await passField.isVisible())) {
-                  const nextButton = await page.$(`button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext`);
-                  if (nextButton && await nextButton.isVisible()) {
-                    await nextButton.click();
-                    try {
-                      passField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 5000 });
-                    } catch (e) { }
+              if (isUserVis || isPassVis) {
+                if (isUserVis) {
+                  const el = await page.$(selUser);
+                  if (el && await el.inputValue() !== USER_EMAIL) {
+                    await el.fill(USER_EMAIL);
+                    if (!isPassVis) {
+                      const btn = await page.$(selBtn);
+                      if (btn && await btn.isVisible()) await btn.click();
+                    }
                   }
                 }
-
-                if (passField && await passField.isVisible()) {
-                  const passValue = await passField.inputValue();
-                  if (passValue === '') {
-                    await passField.fill(USER_PASSWORD);
-                    await passField.press('Enter');
-                    console.log("⏳ Logando...");
-
-                    await page.waitForTimeout(8000);
-
-                    await captureSession();
-                    console.log("✅ Login feito e Sessão Capturada.");
+                const elPass = await page.$(selPass);
+                if (elPass && await elPass.isVisible()) {
+                  if (await elPass.inputValue() === '') {
+                    console.log("🔑 Inserindo credenciais...");
+                    await elPass.fill(USER_PASSWORD);
+                    await page.waitForTimeout(500);
+                    await elPass.press('Enter');
+                    console.log("🚀 Login submetido.");
+                    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+                    hasLoggedIn = true;
                   }
                 }
               }
             }
-
             await page.waitForTimeout(2000);
-
           } catch (error: any) {
-            if (error.message.includes('Target closed') || error.message.includes('closed')) {
-              console.log("❌ Navegador fechado pelo usuário.");
-              break;
-            }
+            if (error.message.includes('Target closed')) break;
           }
         }
+
+        // Limpa segurança ao sair
+        if (securityInterval) clearInterval(securityInterval);
+
+        if (save_strategy === 'always' && !context.pages()[0]?.isClosed()) {
+          try { finalSessionData = await context.storageState(); } catch { }
+        }
+        else if (save_strategy === 'on_login' && hasLoggedIn && !context.pages()[0]?.isClosed()) {
+          try { finalSessionData = await context.storageState(); } catch { }
+        }
+
         resolve();
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send("app-closed", args.id);
         }
       });
 
-      return { success: true, session_data: capturedSession };
+      return { success: true, session_data: finalSessionData };
 
     } catch (error: any) {
-      console.error("Erro ao lançar app:", error);
+      console.error("Erro:", error);
+      if (securityInterval) clearInterval(securityInterval);
       return { success: false, error: error.message };
     }
   });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
