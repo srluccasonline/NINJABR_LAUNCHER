@@ -1,4 +1,12 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+// ADICIONE ISSO AQUI EM CIMA:
+import { updateElectronApp } from 'update-electron-app';
+
+// Configuração do Auto-Update (Só funciona empacotado)
+updateElectronApp({
+  updateInterval: '1 hour',
+  notifyUser: true // Cria uma notificação nativa quando baixa o update
+});
 import { chromium } from 'patchright';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';

@@ -1,0 +1,36 @@
+name: Build & Publish
+
+on:
+  push:
+    tags:
+      - 'v*' # Dispara ao subir tags (v1.0.0, v1.0.1, etc)
+
+permissions:
+  contents: write # Permissão OBRIGATÓRIA para subir os arquivos na Release
+
+jobs:
+  publish:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        # Ao rodar isso, seu script "postinstall" do package.json 
+        # vai baixar o Chromium automaticamente para a pasta ./browsers
+        run: npm install
+
+      - name: Build & Publish
+        # O GITHUB_TOKEN é injetado automaticamente, não precisa configurar nada manual
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run publish
