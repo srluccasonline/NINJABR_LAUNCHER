@@ -58,6 +58,17 @@ app.on('ready', () => {
         password_selector
       } = args;
 
+      // Helper para normalizar input (string ou array)
+      const normalizeInput = (input: any): string[] => {
+        if (!input) return [];
+        if (Array.isArray(input)) return input;
+        if (typeof input === 'string') return input.split('\n').map(s => s.trim()).filter(s => s);
+        return [];
+      };
+
+      const normalizedUrlBlocks = normalizeInput(url_blocks);
+      const normalizedUblockRules = normalizeInput(ublock_rules);
+
       // 1. Proxy
       let proxyConfig = undefined;
       if (proxy_data) {
@@ -113,6 +124,15 @@ app.on('ready', () => {
           return true; // Bloqueia todo o resto
         }
         if (u.startsWith('devtools://')) return true;
+
+        // Bloqueio extra via CDP (User List)
+        if (normalizedUrlBlocks.length > 0) {
+          for (const block of normalizedUrlBlocks) {
+            const cleanBlock = block.replace(/\*/g, '').toLowerCase();
+            if (cleanBlock && u.includes(cleanBlock)) return true;
+          }
+        }
+
         return false;
       };
 
@@ -167,32 +187,77 @@ app.on('ready', () => {
 
 
 
-      // Bloqueio de URLs do usuário
-      if (url_blocks && typeof url_blocks === 'string') {
-        const urls = url_blocks.split('\n').map(u => u.trim()).filter(u => u);
-        for (const u of urls) {
-          const pattern = u.includes('*') ? u : `*${u}*`;
-          await context.route(pattern, r => r.abort());
-        }
+      // Bloqueio de URLs do usuário (Robust Route Matching)
+      if (normalizedUrlBlocks.length > 0) {
+        console.log(`🚫 Bloqueando ${normalizedUrlBlocks.length} padrões de URL.`);
+
+        await context.route((url) => {
+          const u = url.toString().toLowerCase();
+          for (const block of normalizedUrlBlocks) {
+            const cleanBlock = block.replace(/\*/g, '').toLowerCase();
+            if (cleanBlock && u.includes(cleanBlock)) {
+              console.log(`🚫 Aborted blocked URL: ${u} (Matched: ${cleanBlock})`);
+              return true;
+            }
+          }
+          return false;
+        }, route => route.abort());
       }
 
       // =================================================================
 
-      const page = await context.newPage();
+      // Helper para parsear regras uBlock
+      const parseUblockRules = (rules: string[]) => {
+        return rules.map(r => {
+          r = r.trim();
+          if (!r || r.startsWith('!')) return null; // Ignora comentários e vazios
 
-      // CSS Injection (uBlock + Senha)
-      await page.addInitScript(({ rules }) => {
+          if (r.includes('##')) {
+            const [domain, selector] = r.split('##');
+            return { domain: domain.trim(), selector: selector.trim() };
+          }
+          return { domain: '', selector: r }; // Regra global
+        }).filter(r => r !== null) as { domain: string, selector: string }[];
+      };
+
+      const parsedRules = parseUblockRules(normalizedUblockRules);
+
+      // CSS Injection (uBlock + Senha) - Aplicado ao CONTEXTO (todas as abas)
+      await context.addInitScript(({ rules }) => {
+        const currentHost = window.location.hostname;
+
+        // Filtra regras que se aplicam a este domínio
+        const activeSelectors = rules
+          .filter(r => !r.domain || currentHost.includes(r.domain))
+          .map(r => r.selector);
+
+        const cssRules = activeSelectors.join(', ');
+
         let css = `input[type="password"] { -webkit-text-security: disc !important; user-select: none !important; filter: blur(2px); }`;
-        if (rules) css += ` ${rules} { display: none !important; opacity: 0 !important; }`;
+        if (cssRules) css += ` ${cssRules} { display: none !important; opacity: 0 !important; }`;
+
         const style = document.createElement('style');
         style.innerHTML = css;
         document.head.appendChild(style);
+
         document.addEventListener('copy', (e: any) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
-      }, { rules: (ublock_rules && typeof ublock_rules === 'string') ? ublock_rules.split('\n').join(', ') : '' });
+      }, { rules: parsedRules });
+
+      if (parsedRules.length > 0) console.log(`🎨 ${parsedRules.length} regras de bloqueio visual carregadas.`);
+
+      const page = await context.newPage();
 
 
       console.log(`Navegando para ${TARGET_URL}...`);
-      await page.goto(TARGET_URL);
+      try {
+        await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      } catch (e: any) {
+        console.log(`⚠️ Navegação inicial: ${e.message}`);
+        // Se foi abortado pelo usuário ou fechado, não é um erro crítico do sistema
+        if (e.message.includes('ERR_ABORTED') || e.message.includes('Target closed')) {
+          console.log("🛑 Navegação interrompida pelo usuário ou segurança.");
+        }
+      }
 
       await page.waitForTimeout(3000);
 
@@ -205,11 +270,19 @@ app.on('ready', () => {
         const selPass = password_selector || 'input[type="password"]';
         const selBtn = `button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext`;
 
+        // Extrair hostname do alvo para restringir o auto-login
+        let targetHostname = '';
+        try { targetHostname = new URL(TARGET_URL).hostname; } catch { }
+
         while (true) {
           try {
             if (page.isClosed()) break;
 
-            if (is_autofill_enabled && USER_EMAIL && USER_PASSWORD && !hasLoggedIn) {
+            // Restrição de Domínio: Só tenta logar se estiver no domínio alvo
+            const currentUrl = page.url();
+            const isTargetDomain = targetHostname && currentUrl.includes(targetHostname);
+
+            if (is_autofill_enabled && USER_EMAIL && USER_PASSWORD && !hasLoggedIn && isTargetDomain) {
               const isUserVis = await page.isVisible(selUser, { timeout: 500 }).catch(() => false);
               const isPassVis = await page.isVisible(selPass, { timeout: 500 }).catch(() => false);
 

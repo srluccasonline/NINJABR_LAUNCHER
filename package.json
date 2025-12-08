@@ -1,8 +1,8 @@
 {
-  "name": "ninja_electron",
-  "productName": "ninja_electron",
+  "name": "NINJABR",
+  "productName": "NINJABR",
   "version": "1.0.0",
-  "description": "My Electron application description",
+  "description": "NinjaBR - Browser Anti Detecção",
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "electron-forge start",
