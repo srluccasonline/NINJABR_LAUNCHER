@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { updateElectronApp } from 'update-electron-app';
-import { chromium } from 'patchright';
+import { chromium, Browser } from 'patchright';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
@@ -28,6 +28,7 @@ if (app.isPackaged) {
 if (started) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
+const activeBrowsers = new Set<Browser>();
 
 // ==========================================================
 // 3. HANDLER DO LAUNCH-APP (AGORA NO ESCOPO GLOBAL)
@@ -38,6 +39,7 @@ ipcMain.handle('launch-app', async (event, args) => {
 
   // Controle do Intervalo de Segurança
   let securityInterval: NodeJS.Timeout | null = null;
+  let browser: Browser | null = null;
 
   try {
     const {
@@ -76,7 +78,12 @@ ipcMain.handle('launch-app', async (event, args) => {
     }
 
     // 2. LANÇAR NAVEGADOR
-    const browser = await chromium.launch({ headless: false });
+    browser = await chromium.launch({ headless: false });
+    activeBrowsers.add(browser);
+
+    browser.on('disconnected', () => {
+      if (browser) activeBrowsers.delete(browser);
+    });
 
     // 3. CONTEXTO
     const contextOptions: any = {
@@ -255,7 +262,10 @@ ipcMain.handle('launch-app', async (event, args) => {
       }
     }
 
-    await page.waitForTimeout(3000);
+    // Safer wait
+    if (!page.isClosed()) {
+      await page.waitForTimeout(3000).catch(() => { });
+    }
 
     let finalSessionData: any = null;
     let hasLoggedIn = false;
@@ -273,6 +283,7 @@ ipcMain.handle('launch-app', async (event, args) => {
       while (true) {
         try {
           if (page.isClosed()) break;
+          if (!browser?.isConnected()) break;
 
           // Restrição de Domínio: Só tenta logar se estiver no domínio alvo
           const currentUrl = page.url();
@@ -309,7 +320,7 @@ ipcMain.handle('launch-app', async (event, args) => {
           }
           await page.waitForTimeout(2000);
         } catch (error: any) {
-          if (error.message.includes('Target closed')) break;
+          if (error.message.includes('Target closed') || error.message.includes('browser has been closed')) break;
         }
       }
 
@@ -329,11 +340,19 @@ ipcMain.handle('launch-app', async (event, args) => {
       }
     });
 
+    // Cleanup explícito ao fim da sessão
+    if (browser && browser.isConnected()) {
+      await browser.close().catch(() => { });
+    }
+
     return { success: true, session_data: finalSessionData };
 
   } catch (error: any) {
     console.error("Erro:", error);
     if (securityInterval) clearInterval(securityInterval);
+    if (browser && browser.isConnected()) {
+      await browser.close().catch(() => { });
+    }
     return { success: false, error: error.message };
   }
 });
@@ -368,6 +387,18 @@ const createWindow = () => {
 app.on('ready', () => {
   createWindow();
   // O ipcMain.handle já foi registrado lá em cima, não precisa estar aqui
+});
+
+app.on('before-quit', async (e) => {
+  // Fecha todos os navegadores abertos antes de sair
+  console.log(`🛑 Fechando ${activeBrowsers.size} navegadores ativos...`);
+  for (const browser of activeBrowsers) {
+    try {
+      await browser.close();
+    } catch (err) {
+      console.error("Erro ao fechar navegador no quit:", err);
+    }
+  }
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
