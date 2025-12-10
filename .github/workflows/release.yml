@@ -6,25 +6,20 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: write # Obrigatório para subir arquivos na Release
 
 jobs:
-  publish:
+  build-and-upload:
     name: Build on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 1. Windows (x64)
           - os: windows-latest
             name: Windows
-            
-          # 2. Mac Intel (CORRIGIDO: Agora usa a nova imagem Intel do macOS 15)
           - os: macos-15-intel
             name: macOS Intel
-            
-          # 3. Mac ARM/M1/M2 (macos-latest agora é sempre ARM por padrão)
           - os: macos-latest
             name: macOS ARM
 
@@ -38,11 +33,34 @@ jobs:
           node-version: 20
 
       - name: Install Dependencies
-        # Ao rodar no macos-15-intel, o Patchright baixa o Chromium Intel.
-        # Ao rodar no macos-latest (ARM), ele baixa o Chromium ARM.
         run: npm install
 
-      - name: Build & Publish
+      # 1. EM VEZ DE PUBLISH, USAMOS MAKE
+      # Isso apenas gera os arquivos na pasta out/make, sem tentar subir ainda
+      - name: Compile (Make)
+        run: npm run make
+
+      # 2. DEBUG: Mostra o que foi gerado (pra gente ter certeza)
+      - name: List Artifacts
+        shell: bash
+        run: |
+          echo "Looking for files in out/make..."
+          ls -R out/make || echo "Folder not found"
+
+      # 3. UPLOAD MANUAL (A FORMA MAIS SEGURA)
+      # Essa action pega os arquivos gerados e anexa na Release da Tag atual
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          # Define quais arquivos subir (usando coringas *)
+          files: |
+            out/make/**/*.exe
+            out/make/**/*.nupkg
+            out/make/**/RELEASES
+            out/make/**/*.zip
+            out/make/**/*.dmg
+          draft: true # Cria como rascunho para você aprovar
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run publish
