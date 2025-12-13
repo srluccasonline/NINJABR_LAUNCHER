@@ -251,6 +251,18 @@ ipcMain.handle('launch-app', async (event, args) => {
     const page = await context.newPage();
 
 
+    // 5. Monitoramento de Fechamento da Página
+    page.on('close', async () => {
+      console.log("❌ Página principal fechada. Encerrando navegador...");
+      try {
+        if (browser?.isConnected()) {
+          await browser.close();
+        }
+      } catch (e) {
+        // Ignora erros se já estiver fechando
+      }
+    });
+
     console.log(`Navegando para ${TARGET_URL}...`);
     try {
       await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -341,8 +353,12 @@ ipcMain.handle('launch-app', async (event, args) => {
     });
 
     // Cleanup explícito ao fim da sessão
-    if (browser && browser.isConnected()) {
-      await browser.close().catch(() => { });
+    try {
+      if (browser && browser.isConnected()) {
+        await browser.close();
+      }
+    } catch (e) {
+      console.error("Erro ao fechar navegador no cleanup final:", e);
     }
 
     return { success: true, session_data: finalSessionData };
@@ -355,6 +371,22 @@ ipcMain.handle('launch-app', async (event, args) => {
     }
     return { success: false, error: error.message };
   }
+});
+
+// ==========================================================
+// KILL SWITCH (FECHAR TUDO)
+// ==========================================================
+ipcMain.handle('apps:kill-all', async () => {
+  console.log(`☠️ KILL SWITCH ATIVADO: Fechando ${activeBrowsers.size} apps...`);
+  const promises = [];
+  for (const browser of activeBrowsers) {
+    if (browser.isConnected()) {
+      promises.push(browser.close().catch(e => console.error("Erro ao fechar no kill-switch:", e)));
+    }
+  }
+  await Promise.all(promises);
+  activeBrowsers.clear();
+  return true;
 });
 
 // ==========================================================
@@ -378,6 +410,7 @@ const createWindow = () => {
     }
   });
 
+  // mainWindow.loadURL("http://localhost:3000/");
   mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 

@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  launchApp: (args: any) => ipcRenderer.invoke('launch-app', args),
-  onAppClosed: (callback: (event: any, appId: string) => void) => ipcRenderer.on('app-closed', callback),
+  // Lança um novo App (Navegador)
+  launchApp: (args: any, token: string) => ipcRenderer.invoke('launch-app', args, token),
+
+  // ☠️ KILL SWITCH: Fecha todos os navegadores abertos pelo Electron
+  killAllApps: () => ipcRenderer.invoke('apps:kill-all'),
+
+  // Ouve quando um app fecha sozinho (para atualizar a UI)
+  onAppClosed: (callback: (event: any, id: string) => void) =>
+    ipcRenderer.on('app-closed', callback)
 });
