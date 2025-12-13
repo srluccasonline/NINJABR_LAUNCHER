@@ -236,14 +236,73 @@ ipcMain.handle('launch-app', async (event, args) => {
 
       const cssRules = activeSelectors.join(', ');
 
-      let css = `input[type="password"] { -webkit-text-security: disc !important; user-select: none !important; filter: blur(2px); }`;
+      // Aumentado blur para 5px e adicionado regras para inputs protegidos
+      let css = `
+        input[type="password"], input[data-protected-password="true"] { 
+          -webkit-text-security: disc !important; 
+          text-security: disc !important;
+          user-select: none !important; 
+          filter: blur(5px) !important; 
+        }
+      `;
       if (cssRules) css += ` ${cssRules} { display: none !important; opacity: 0 !important; }`;
 
       const style = document.createElement('style');
       style.innerHTML = css;
-      document.head.appendChild(style);
+      (document.head || document.documentElement).appendChild(style);
 
       document.addEventListener('copy', (e: any) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
+
+      // --- PROTEÇÃO CONTRA REVEAL (OLHO MÁGICO) ---
+      // Impede que o type="password" seja alterado para "text"
+      const enforcePasswordType = () => {
+        const protect = (el: any) => {
+          if (el.tagName === 'INPUT') {
+            // Se for password, marca como protegido
+            if (el.type === 'password') {
+              el.setAttribute('data-protected-password', 'true');
+            }
+            // Se estiver marcado como protegido mas não for password (ex: mudou para text), força voltar
+            if (el.getAttribute('data-protected-password') === 'true' && el.type !== 'password') {
+              console.log('🛡️ Tentativa de revelar senha bloqueada!');
+              el.type = 'password';
+            }
+          }
+        };
+
+        const observer = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            if (m.type === 'attributes' && m.attributeName === 'type') {
+              protect(m.target);
+            }
+            if (m.type === 'childList') {
+              m.addedNodes.forEach((node: any) => {
+                if (node.tagName === 'INPUT') protect(node);
+                if (node.querySelectorAll) node.querySelectorAll('input').forEach(protect);
+              });
+            }
+          }
+        });
+
+        // Inicia observação assim que possível
+        const start = () => {
+          if (document.body) {
+            observer.observe(document.body, { attributes: true, attributeFilter: ['type'], childList: true, subtree: true });
+            document.querySelectorAll('input').forEach(protect);
+          } else {
+            // Se body ainda não existe, tenta novamente em breve ou no DOMContentLoaded
+            requestAnimationFrame(start);
+          }
+        };
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', start);
+        } else {
+          start();
+        }
+      };
+      enforcePasswordType();
+
     }, { rules: parsedRules });
 
     if (parsedRules.length > 0) console.log(`🎨 ${parsedRules.length} regras de bloqueio visual carregadas.`);
