@@ -28,7 +28,9 @@ const config: ForgeConfig = {
   },
   packagerConfig: {
     // O Forge detecta automaticamente .ico (Win) e .icns (Mac) se o nome base for esse
-    icon: path.resolve(__dirname, 'imgs/icon'),
+    // Como os arquivos estao em pastas separadas, selecionamos baseado na plataforma
+    // Se estiver no Mac, usa o .icns. Se estiver no Windows ou Linux (buildando para Win), usa o .ico
+    icon: path.resolve(__dirname, `imgs/icons/${process.platform === 'darwin' ? 'mac/icon.icns' : 'win/icon.ico'}`),
     extraResource: [
       './browsers'
     ],
@@ -42,7 +44,7 @@ const config: ForgeConfig = {
     // WINDOWS - Cria o Setup.exe e configura auto-update
     new MakerSquirrel({
       // Garante que o instalador (Setup.exe) tenha o icone correto
-      setupIcon: path.resolve(__dirname, 'imgs/icon.ico'),
+      setupIcon: path.resolve(__dirname, 'imgs/icons/win/icon.ico'),
     }),
 
     // MACOS - Cria apenas o ZIP (o mais compatível sem assinatura paga)
