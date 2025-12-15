@@ -22,13 +22,17 @@ if (process.platform === 'win32') {
 // ==========================================================
 // 2. CONFIGURAÇÃO DE CAMINHOS
 // ==========================================================
-if (app.isPackaged) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'browsers');
-} else {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(__dirname, '../../browsers');
-}
+const BROWSERS_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, 'browsers')
+  : path.join(__dirname, '../../browsers');
 
-import { chromium } from 'patchright';
+process.env.PLAYWRIGHT_BROWSERS_PATH = path.resolve(BROWSERS_PATH);
+
+console.log(`🔧 [SETUP] Playwright Browsers Path set to: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+
+const { chromium } = require('patchright');
+
+console.log(`✅ [CHECK] Chromium Executable Path: ${chromium.executablePath()}`);
 
 if (started) app.quit();
 

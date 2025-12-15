@@ -1,7 +1,7 @@
 {
   "name": "NINJABR",
   "productName": "NINJABR",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "NinjaBR - Browser Anti Detecção",
   "main": ".vite/build/main.js",
   "repository": {
