@@ -9,5 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Ouve quando um app fecha sozinho (para atualizar a UI)
   onAppClosed: (callback: (event: any, id: string) => void) =>
-    ipcRenderer.on('app-closed', callback)
+    ipcRenderer.on('app-closed', callback),
+
+  // Abre a pasta do download
+  openDownloadFolder: (path: string) => ipcRenderer.invoke('downloads:open-folder', path)
 });

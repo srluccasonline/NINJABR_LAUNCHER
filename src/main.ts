@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import fs from 'fs';
 import { updateElectronApp } from 'update-electron-app';
 import { chromium, Browser } from 'patchright';
 import path from 'node:path';
@@ -324,6 +325,147 @@ ipcMain.handle('launch-app', async (event, args) => {
       }
     });
 
+    // Map para guardar tamanho dos arquivos (URL -> Content-Length)
+    const urlSizes = new Map<string, number>();
+
+    page.on('response', async (response) => {
+      try {
+        const url = response.url();
+        const headers = response.headers();
+        const len = headers['content-length'];
+        if (len) {
+          urlSizes.set(url, parseInt(len, 10));
+        }
+      } catch (e) { }
+    });
+
+    // 6. Gerenciamento de Downloads (Save As + Progresso + UI Injetada)
+    page.on('download', async (download) => {
+      const suggestedFilename = download.suggestedFilename();
+      const url = download.url();
+      const totalBytes = urlSizes.get(url) || 0;
+      const downloadId = `dl-${Date.now()}`; // ID único para o elemento DOM
+
+      console.log(`⬇️ Download iniciado: ${suggestedFilename} (Total: ${totalBytes} bytes)`);
+
+      // --- INJETAR UI DE DOWNLOAD ---
+      try {
+        await page.evaluate(({ id, filename }) => {
+          const div = document.createElement('div');
+          div.id = id;
+          div.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; width: 320px;
+            background: #1e1e1e; color: #fff; padding: 15px;
+            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            font-family: sans-serif; z-index: 999999; display: flex; flex-direction: column; gap: 8px;
+            border: 1px solid #333; transition: all 0.3s ease;
+          `;
+          div.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong style="font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px;">${filename}</strong>
+              <button onclick="this.parentElement.parentElement.remove()" style="background:none; border:none; color:#888; cursor:pointer; font-size:16px;">&times;</button>
+            </div>
+            <div style="background:#333; height:6px; border-radius:3px; overflow:hidden;">
+              <div id="${id}-bar" style="width:0%; height:100%; background:#10b981; transition: width 0.2s;"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; color:#aaa;">
+              <span id="${id}-status">Baixando...</span>
+              <span id="${id}-percent">0%</span>
+            </div>
+            <button id="${id}-btn" style="display:none; margin-top:5px; background:#3b82f6; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:12px;">
+              Abrir Pasta
+            </button>
+          `;
+          document.body.appendChild(div);
+        }, { id: downloadId, filename: suggestedFilename });
+      } catch (e) { console.error("Erro ao injetar UI:", e); }
+
+      try {
+        const { filePath, canceled } = await dialog.showSaveDialog({
+          defaultPath: suggestedFilename,
+          title: 'Salvar arquivo',
+          buttonLabel: 'Salvar'
+        });
+
+        if (canceled || !filePath) {
+          console.log("🚫 Download cancelado pelo usuário.");
+          await download.cancel();
+          // Remove UI se cancelado
+          await page.evaluate((id) => document.getElementById(id)?.remove(), downloadId).catch(() => { });
+          return;
+        }
+
+        console.log(`💾 Salvando em: ${filePath}`);
+
+        // Inicia Stream
+        const stream = await download.createReadStream();
+        const writer = fs.createWriteStream(filePath);
+
+        let downloadedBytes = 0;
+
+        stream.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+
+          if (totalBytes > 0) {
+            const progress = downloadedBytes / totalBytes;
+            const percent = Math.round(progress * 100);
+
+            // Atualiza barra de tarefas
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(progress);
+
+            // Atualiza UI Injetada (throttled via page.evaluate pode ser pesado, mas ok para local)
+            // Fazemos um check simples para não spammar o evaluate a cada chunk
+            if (percent % 5 === 0) {
+              page.evaluate(({ id, p }) => {
+                const bar = document.getElementById(`${id}-bar`);
+                const txt = document.getElementById(`${id}-percent`);
+                if (bar) bar.style.width = `${p}%`;
+                if (txt) txt.innerText = `${p}%`;
+              }, { id: downloadId, p: percent }).catch(() => { });
+            }
+          }
+        });
+
+        stream.on('end', async () => {
+          console.log("✅ Download concluído.");
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setProgressBar(-1);
+            mainWindow.flashFrame(true);
+          }
+
+          // Atualiza UI para Sucesso e Botão Abrir
+          await page.evaluate(({ id, path }) => {
+            const bar = document.getElementById(`${id}-bar`);
+            const status = document.getElementById(`${id}-status`);
+            const btn = document.getElementById(`${id}-btn`);
+            if (bar) { bar.style.background = '#3b82f6'; bar.style.width = '100%'; }
+            if (status) { status.innerText = 'Concluído'; status.style.color = '#3b82f6'; }
+            if (btn) {
+              btn.style.display = 'block';
+              btn.onclick = () => window.electronAPI.openDownloadFolder(path);
+            }
+            // Auto-remove após 10s se não interagir
+            setTimeout(() => {
+              const el = document.getElementById(id);
+              if (el) { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }
+            }, 10000);
+          }, { id: downloadId, path: filePath }).catch(() => { });
+        });
+
+        stream.pipe(writer);
+
+      } catch (err) {
+        console.error("❌ Erro no download:", err);
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(-1);
+
+        // Atualiza UI para Erro
+        await page.evaluate((id) => {
+          const status = document.getElementById(`${id}-status`);
+          if (status) { status.innerText = 'Erro no Download'; status.style.color = '#ef4444'; }
+        }, downloadId).catch(() => { });
+      }
+    });
+
     console.log(`Navegando para ${TARGET_URL}...`);
     try {
       await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -450,6 +592,15 @@ ipcMain.handle('apps:kill-all', async () => {
   await Promise.all(promises);
   activeBrowsers.clear();
   return true;
+});
+
+// ==========================================================
+// DOWNLOAD HELPER (ABRIR PASTA)
+// ==========================================================
+ipcMain.handle('downloads:open-folder', async (event, filePath) => {
+  if (filePath) {
+    shell.showItemInFolder(filePath);
+  }
 });
 
 // ==========================================================
