@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import fs from 'fs';
 import { updateElectronApp } from 'update-electron-app';
-import { chromium, Browser } from 'patchright';
+import type { Browser } from 'patchright';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
@@ -27,6 +27,8 @@ if (app.isPackaged) {
 } else {
   process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(__dirname, '../../browsers');
 }
+
+import { chromium } from 'patchright';
 
 if (started) app.quit();
 
