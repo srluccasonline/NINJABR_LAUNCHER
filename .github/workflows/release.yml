@@ -22,6 +22,8 @@ jobs:
             name: macOS Intel
           - os: macos-latest
             name: macOS ARM
+          - os: ubuntu-latest
+            name: Linux
 
     steps:
       - name: Checkout Code
@@ -31,6 +33,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm fakeroot
 
       - name: Install Dependencies
         run: npm install
@@ -60,6 +68,8 @@ jobs:
             out/make/**/RELEASES
             out/make/**/*.zip
             out/make/**/*.dmg
+            out/make/**/*.rpm
+            out/make/**/*.deb
           draft: true # Cria como rascunho para você aprovar
           prerelease: false
         env:

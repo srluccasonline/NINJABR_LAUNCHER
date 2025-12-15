@@ -1,4 +1,6 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
+import { MakerDeb } from '@electron-forge/maker-deb';
+import { MakerRpm } from '@electron-forge/maker-rpm';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { VitePlugin } from '@electron-forge/plugin-vite';
@@ -50,7 +52,17 @@ const config: ForgeConfig = {
     // MACOS - Cria apenas o ZIP (o mais compatível sem assinatura paga)
     new MakerZIP({}, ['darwin']),
 
-    // Removi Linux (Deb/Rpm) para agilizar seu build, já que o foco é Win/Mac
+    // LINUX
+    new MakerRpm({
+      options: {
+        icon: path.resolve(__dirname, 'imgs/icons/png/512x512.png'),
+      }
+    }),
+    new MakerDeb({
+      options: {
+        icon: path.resolve(__dirname, 'imgs/icons/png/512x512.png'),
+      }
+    }),
   ],
   publishers: [
     new PublisherGithub({
