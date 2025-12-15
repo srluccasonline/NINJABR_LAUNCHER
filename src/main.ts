@@ -7,6 +7,8 @@ import started from 'electron-squirrel-startup';
 // ==========================================================
 // 1. AUTO UPDATE (SOMENTE WINDOWS)
 // ==========================================================
+
+
 // Evita crash no Mac por falta de assinatura
 if (process.platform === 'win32') {
   updateElectronApp({
@@ -436,6 +438,8 @@ ipcMain.handle('launch-app', async (event, args) => {
 // KILL SWITCH (FECHAR TUDO)
 // ==========================================================
 ipcMain.handle('apps:kill-all', async () => {
+  if (activeBrowsers.size === 0) return true;
+
   console.log(`☠️ KILL SWITCH ATIVADO: Fechando ${activeBrowsers.size} apps...`);
   const promises = [];
   for (const browser of activeBrowsers) {
@@ -469,8 +473,8 @@ const createWindow = () => {
     }
   });
 
-  // mainWindow.loadURL("http://localhost:3000/");
-  mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
+  mainWindow.loadURL("http://localhost:3000/");
+  //mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 
 // ==========================================================
