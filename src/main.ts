@@ -624,8 +624,8 @@ const createWindow = () => {
     }
   });
 
-  mainWindow.loadURL("http://localhost:3000/");
-  //mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
+  //mainWindow.loadURL("http://localhost:3000/");
+  mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 
 // ==========================================================
