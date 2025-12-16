@@ -321,14 +321,8 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     // 5. Monitoramento de Fechamento da Página
     page.on('close', async () => {
-      console.log("❌ Página principal fechada. Encerrando navegador...");
-      try {
-        if (browser?.isConnected()) {
-          await browser.close();
-        }
-      } catch (e) {
-        // Ignora erros se já estiver fechando
-      }
+      console.log("❌ Página principal fechada.");
+      // Não fechamos o browser aqui para permitir salvar a sessão no final do loop
     });
 
     // Map para guardar tamanho dos arquivos (URL -> Content-Length)
@@ -548,10 +542,10 @@ ipcMain.handle('launch-app', async (event, args) => {
       // Limpa segurança ao sair
       if (securityInterval) clearInterval(securityInterval);
 
-      if (save_strategy === 'always' && !context.pages()[0]?.isClosed()) {
+      if (save_strategy === 'always') {
         try { finalSessionData = await context.storageState(); } catch { }
       }
-      else if (save_strategy === 'on_login' && hasLoggedIn && !context.pages()[0]?.isClosed()) {
+      else if (save_strategy === 'on_login' && hasLoggedIn) {
         try { finalSessionData = await context.storageState(); } catch { }
       }
 
