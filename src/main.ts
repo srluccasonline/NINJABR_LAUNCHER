@@ -142,6 +142,171 @@ ipcMain.handle('launch-app', async (event, args) => {
     context.setDefaultTimeout(60000); // 60 segundos de timeout global
 
     // =================================================================
+    // CDP SECURITY (URL BLOCKING)
+    // =================================================================
+    try {
+      const page = await context.newPage(); // Create page first to get CDP session
+      const client = await context.newCDPSession(page);
+      await client.send('Target.setDiscoverTargets', { discover: true });
+
+      const checkTarget = async (targetInfo: any) => {
+        const url = targetInfo.url || '';
+        const type = targetInfo.type;
+
+        // CRITICAL: Allow downloads (type 'other' or empty URL often indicates download)
+        if (type === 'other' || (type === 'page' && url === '')) {
+          return;
+        }
+
+        const isForbidden =
+          url.startsWith('chrome://') ||
+          url.startsWith('devtools://') ||
+          url.startsWith('edge://') ||
+          (url.startsWith('about:') && url !== 'about:blank');
+
+        if (isForbidden) {
+          if (IS_DEV) console.log(`🚫 [CDP] Bloqueando alvo proibido: ${url}`);
+          try {
+            await client.send('Target.closeTarget', { targetId: targetInfo.targetId });
+          } catch (e) { /* Ignore if already closed */ }
+        }
+      };
+
+      client.on('Target.targetCreated', async (params: any) => checkTarget(params.targetInfo));
+      client.on('Target.targetInfoChanged', async (params: any) => checkTarget(params.targetInfo));
+    } catch (e) {
+      if (IS_DEV) console.error("⚠️ Falha ao iniciar CDP:", e);
+    }
+
+    // =================================================================
+    // EFFECTIVE PASSWORD BLURRING (RESILIENT MODE)
+    // =================================================================
+    await context.addInitScript(() => {
+      const INJECT_ID = 'ninja-resilient-blur';
+
+      const applyMarker = (root: Node = document) => {
+        const processElement = (el: any) => {
+          // Heurística Agressiva: Type password OU nome/id/placeholder/aria-label contendo "pass"
+          const isPassword =
+            el.matches('input[type="password"]') ||
+            (el.matches('input') && (
+              (el.name && el.name.toLowerCase().includes('pass')) ||
+              (el.id && el.id.toLowerCase().includes('pass')) ||
+              (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
+              (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
+            ));
+
+          if (isPassword) {
+            if (!el.hasAttribute('data-ninja-protected')) {
+              el.setAttribute('data-ninja-protected', 'true');
+              // NUCLEAR OPTION: Transparente + Sombra + Blur
+              el.style.setProperty('filter', 'blur(8px)', 'important');
+              el.style.setProperty('-webkit-text-security', 'disc', 'important');
+              el.style.setProperty('color', 'transparent', 'important');
+              el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
+            }
+          }
+          // Shadow DOM Support
+          if (el.shadowRoot) {
+            applyMarker(el.shadowRoot);
+          }
+        };
+
+        // 1. Verifica o próprio elemento (root)
+        processElement(root);
+
+        // 2. Verifica descendentes
+        const query = 'input'; // Pega todos inputs e filtra na função
+        const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
+        elements.forEach((el: any) => processElement(el));
+      };
+
+      // 1. CSS de Alta Especificidade e Text-Security
+      if (!document.getElementById(INJECT_ID)) {
+        const style = document.createElement('style');
+        style.id = INJECT_ID;
+        style.innerHTML = `
+          html body input[type="password"], 
+          html body input[data-ninja-protected="true"] {
+            filter: blur(8px) !important;
+            -webkit-text-security: disc !important;
+            text-security: disc !important;
+            color: transparent !important;
+            text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
+          }
+          /* Proteção total em todos os estados */
+          html body input[data-ninja-protected="true"]:focus,
+          html body input[data-ninja-protected="true"]:hover,
+          html body input[data-ninja-protected="true"]:active {
+            filter: blur(8px) !important;
+            -webkit-text-security: disc !important;
+            color: transparent !important;
+            text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
+          }
+          /* Esconder botões nativos de revelar senha */
+          input::-ms-reveal,
+          input::-ms-clear,
+          input::-webkit-credentials-auto-fill-button {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+          }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+      }
+
+      // 2. Marcar campos existentes e iniciar observador
+      applyMarker();
+
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          // Novos elementos
+          if (m.addedNodes.length) {
+            m.addedNodes.forEach(node => {
+              if (node.nodeType === 1) applyMarker(node);
+            });
+          }
+          // Mudança de atributos (ex: type mudando de password para text)
+          if (m.type === 'attributes' && (m.target as HTMLElement).nodeName === 'INPUT') {
+            applyMarker(m.target);
+          }
+        }
+      });
+
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label']
+      });
+
+      // 3. Fallback Seguro (500ms) - Reforço para persistência
+      setInterval(() => applyMarker(), 500);
+
+      // 4. AGGRESSIVE TYPE ENFORCEMENT (100ms)
+      // Força bruta: Se achar um campo de senha que virou texto, volta pra senha NA HORA.
+      setInterval(() => {
+        const forcePasswordType = (root: Node = document) => {
+          const query = 'input[data-ninja-protected="true"]';
+          const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
+
+          elements.forEach((el: any) => {
+            if (el.type !== 'password') {
+              el.type = 'password'; // Reverte imediatamente
+            }
+          });
+
+          // Shadow DOM Support
+          const allElements = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
+          allElements.forEach((el: any) => {
+            if (el.shadowRoot) forcePasswordType(el.shadowRoot);
+          });
+        };
+        forcePasswordType();
+      }, 100);
+    });
+
+    // =================================================================
     // DOMAIN LOCKING (WHITELIST)
     // =================================================================
     let allowedHost = '';
