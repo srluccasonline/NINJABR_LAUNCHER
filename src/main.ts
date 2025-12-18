@@ -12,7 +12,7 @@ import pkg from '../package.json';
 if (process.platform === 'win32') {
   updateElectronApp({
     repo: 'srluccasonline/NINJABR_LAUNCHER',
-    updateInterval: '1 hour',
+    updateInterval: '10 minutes',
     notifyUser: true
   });
 }
@@ -103,6 +103,7 @@ ipcMain.handle('launch-app', async (event, args) => {
         username: proxy_data.username,
         password: proxy_data.password
       };
+      console.log(`🌐 [PROXY] Usando: ${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port} (User: ${proxy_data.username})`);
     }
 
     // LANÇAR NAVEGADOR
@@ -133,6 +134,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     }
 
     const context = await browser.newContext(contextOptions);
+    context.setDefaultTimeout(60000); // 60 segundos de timeout global
 
     // SEGURANÇA CDP
     const isUrlForbidden = (url: string) => {
@@ -290,7 +292,16 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     const page = await context.newPage();
     console.log(`Navegando para ${TARGET_URL}...`);
-    await page.goto(TARGET_URL);
+
+    try {
+      await page.goto(TARGET_URL, {
+        timeout: 60000,
+        waitUntil: 'domcontentloaded'
+      });
+    } catch (gotoError: any) {
+      console.error("⚠️ Erro no page.goto:", gotoError.message);
+      // Não damos throw aqui para tentar manter a página aberta para o usuário ver o erro do browser
+    }
 
     await new Promise<void>((resolve) => {
       page.on('close', () => { console.log("🚪 Página fechada."); resolve(); });

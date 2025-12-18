@@ -14,7 +14,8 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "postinstall": "cross-env PLAYWRIGHT_BROWSERS_PATH=./browsers patchright install chromium"
+    "download-browsers": "node scripts/download-browsers.js",
+    "postinstall": "npm run download-browsers"
   },
   "keywords": [],
   "author": {
