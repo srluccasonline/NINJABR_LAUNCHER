@@ -6,7 +6,29 @@ import path from 'path';
 import os from 'os';
 import pkg from '../package.json';
 
-updateElectronApp();
+// ==========================================================
+// 1. AUTO UPDATE (SOMENTE WINDOWS)
+// ==========================================================
+if (process.platform === 'win32') {
+  updateElectronApp({
+    repo: 'srluccasonline/NINJABR_LAUNCHER',
+    updateInterval: '1 hour',
+    notifyUser: true
+  });
+}
+
+// ==========================================================
+// 2. CONFIGURAÇÃO DE CAMINHOS DO BROWSER
+// ==========================================================
+const BROWSERS_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, 'browsers')
+  : path.join(__dirname, '../../browsers');
+
+process.env.PLAYWRIGHT_BROWSERS_PATH = path.resolve(BROWSERS_PATH);
+
+console.log(`🔧 [SETUP] Playwright Browsers Path: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+console.log(`✅ [CHECK] Chromium Executable: ${chromium.executablePath()}`);
+console.log(`💻 [SYSTEM] OS: ${process.platform} | Arch: ${os.arch()} | Runtime Arch: ${process.arch}`);
 
 // Mantendo o limite de memória em 4GB para evitar OOM
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
@@ -17,6 +39,35 @@ if (require('electron-squirrel-startup')) {
 
 let mainWindow: BrowserWindow | null = null;
 const activeBrowsers = new Set<Browser>();
+
+const createWindow = () => {
+  const platformName = process.platform === 'win32' ? 'WINDOWS' : process.platform === 'darwin' ? 'MAC' : 'LINUX';
+  const archName = os.arch().toUpperCase();
+  const windowTitle = `NINJABR - Versão ${pkg.version} - ${platformName} / ${archName}`;
+
+  mainWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    title: windowTitle,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+    },
+  });
+
+  mainWindow.setMenu(null);
+  mainWindow.on('page-title-updated', (e) => e.preventDefault());
+
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+  }
+};
+
+app.on('ready', createWindow);
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
 ipcMain.handle('launch-app', async (event, args) => {
   console.log("📥 [IPC] launch-app:", args.name);
@@ -38,7 +89,6 @@ ipcMain.handle('launch-app', async (event, args) => {
       password_selector
     } = args;
 
-    // Helper para normalizar input
     const normalizeInput = (input: any): string[] => {
       if (!input) return [];
       if (Array.isArray(input)) return input;
@@ -49,7 +99,6 @@ ipcMain.handle('launch-app', async (event, args) => {
     const normalizedUrlBlocks = normalizeInput(url_blocks);
     const normalizedUblockRules = normalizeInput(ublock_rules);
 
-    // 1. Proxy
     let proxyConfig = undefined;
     if (proxy_data) {
       proxyConfig = {
@@ -59,10 +108,10 @@ ipcMain.handle('launch-app', async (event, args) => {
       };
     }
 
-    // 2. LANÇAR NAVEGADOR
+    // LANÇAR NAVEGADOR
+    // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
     browser = await chromium.launch({
-      headless: false,
-      channel: 'chromium'
+      headless: false
     });
     activeBrowsers.add(browser);
 
@@ -70,7 +119,6 @@ ipcMain.handle('launch-app', async (event, args) => {
       if (browser) activeBrowsers.delete(browser);
     });
 
-    // 3. CONTEXTO
     const contextOptions: any = {
       proxy: proxyConfig,
       viewport: { width: 1280, height: 720 },
@@ -78,7 +126,6 @@ ipcMain.handle('launch-app', async (event, args) => {
       acceptDownloads: true
     };
 
-    // 4. Carregar Sessão
     if (SESSION_FILE_CONTENT) {
       try {
         let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
@@ -90,9 +137,7 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     const context = await browser.newContext(contextOptions);
 
-    // =================================================================
-    // --- SEGURANÇA CDP ---
-    // =================================================================
+    // SEGURANÇA CDP
     const isUrlForbidden = (url: string) => {
       const u = url.toLowerCase();
       if (u.startsWith('chrome://')) {
@@ -126,9 +171,7 @@ ipcMain.handle('launch-app', async (event, args) => {
       console.log("🛡️ Segurança CDP Ativada");
     } catch (e) { console.error("❌ Falha CDP:", e); }
 
-    // =================================================================
     // BROWSER-SIDE INJECTION
-    // =================================================================
     const parseUblockRules = (rules: string[]) => {
       return rules.map(r => {
         r = r.trim();
@@ -147,43 +190,26 @@ ipcMain.handle('launch-app', async (event, args) => {
       try {
         await p.evaluate((params) => {
           const { rules, user, pass, selUser, selPass, selBtn, isAutofill } = params;
-
           if (!document.getElementById('ninja-injected-styles')) {
             const currentHost = window.location.hostname;
-            const activeSelectors = rules
-              .filter(r => !r.domain || currentHost.includes(r.domain))
-              .map(r => r.selector);
-
+            const activeSelectors = rules.filter(r => !r.domain || currentHost.includes(r.domain)).map(r => r.selector);
             const cssRules = activeSelectors.join(', ');
-            let css = `
-              input[type="password"], input[data-protected-password="true"] { 
-                -webkit-text-security: disc !important; 
-                text-security: disc !important;
-                user-select: none !important; 
-                filter: blur(5px) !important; 
-              }
-            `;
+            let css = `input[type="password"], input[data-protected-password="true"] { -webkit-text-security: disc !important; text-security: disc !important; user-select: none !important; filter: blur(5px) !important; }`;
             if (cssRules) css += ` ${cssRules} { display: none !important; opacity: 0 !important; }`;
-
             const style = document.createElement('style');
             style.id = 'ninja-injected-styles';
             style.innerHTML = css;
             (document.head || document.documentElement).appendChild(style);
           }
-
           if (!window.ninjaInitialized) {
             window.ninjaInitialized = true;
             document.addEventListener('copy', (e) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
-
             const protect = (el) => {
               if (el.tagName === 'INPUT') {
                 if (el.type === 'password') el.setAttribute('data-protected-password', 'true');
-                if (el.getAttribute('data-protected-password') === 'true' && el.type !== 'password') {
-                  el.type = 'password';
-                }
+                if (el.getAttribute('data-protected-password') === 'true' && el.type !== 'password') el.type = 'password';
               }
             };
-
             const observer = new MutationObserver((mutations) => {
               for (const m of mutations) {
                 if (m.type === 'attributes' && m.attributeName === 'type') protect(m.target);
@@ -197,36 +223,25 @@ ipcMain.handle('launch-app', async (event, args) => {
             });
             observer.observe(document.documentElement, { attributes: true, attributeFilter: ['type'], childList: true, subtree: true });
             document.querySelectorAll('input').forEach(protect);
-
             if (isAutofill && user && pass) {
               let hasLoggedIn = false;
               const interval = setInterval(() => {
-                if (hasLoggedIn) {
-                  clearInterval(interval);
-                  return;
-                }
+                if (hasLoggedIn) { clearInterval(interval); return; }
                 const elUser = document.querySelector(selUser);
                 const elPass = document.querySelector(selPass);
-
                 if (elUser || elPass) {
                   if (elUser && elUser.value !== user) {
                     elUser.value = user;
                     elUser.dispatchEvent(new Event('input', { bubbles: true }));
                     elUser.dispatchEvent(new Event('change', { bubbles: true }));
-
-                    if (!elPass) {
-                      const btn = document.querySelector(selBtn);
-                      if (btn) btn.click();
-                    }
+                    if (!elPass) { const btn = document.querySelector(selBtn); if (btn) btn.click(); }
                   }
                   const elPassActual = document.querySelector(selPass);
                   if (elPassActual && elPassActual.value === '') {
                     elPassActual.value = pass;
                     elPassActual.dispatchEvent(new Event('input', { bubbles: true }));
                     elPassActual.dispatchEvent(new Event('change', { bubbles: true }));
-                    setTimeout(() => {
-                      elPassActual.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                    }, 500);
+                    setTimeout(() => { elPassActual.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); }, 500);
                     hasLoggedIn = true;
                   }
                 }
@@ -245,30 +260,25 @@ ipcMain.handle('launch-app', async (event, args) => {
       } catch (e) { }
     };
 
-    // =================================================================
-    // DOWNLOAD HANDLER (Save As Dialog)
-    // =================================================================
+    // DOWNLOAD HANDLER
     const setupDownloadHandler = (p: Page) => {
       p.on('download', async (download: Download) => {
         console.log("📥 Download detectado:", download.suggestedFilename());
-
         if (mainWindow && !mainWindow.isDestroyed()) {
           const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
             title: 'Salvar Arquivo',
             defaultPath: path.join(app.getPath('downloads'), download.suggestedFilename()),
             buttonLabel: 'Salvar',
           });
-
           if (!canceled && filePath) {
             console.log("💾 Salvando em:", filePath);
             await download.saveAs(filePath).catch(() => { });
             console.log("✅ Download concluído.");
           } else {
-            console.log("❌ Download cancelado pelo usuário.");
+            console.log("❌ Download cancelado.");
             await download.cancel().catch(() => { });
           }
         } else {
-          // Fallback se a janela principal sumir
           const defaultPath = path.join(app.getPath('downloads'), download.suggestedFilename());
           await download.saveAs(defaultPath).catch(() => { });
         }
@@ -282,32 +292,19 @@ ipcMain.handle('launch-app', async (event, args) => {
     });
 
     const page = await context.newPage();
-
     console.log(`Navegando para ${TARGET_URL}...`);
     await page.goto(TARGET_URL);
 
-    // 5. AGUARDAR FECHAMENTO
     await new Promise<void>((resolve) => {
-      page.on('close', () => {
-        console.log("🚪 Página fechada.");
-        resolve();
-      });
-      browser?.on('disconnected', () => {
-        console.log("🚪 Browser desconectado.");
-        resolve();
-      });
+      page.on('close', () => { console.log("🚪 Página fechada."); resolve(); });
+      browser?.on('disconnected', () => { console.log("🚪 Browser desconectado."); resolve(); });
     });
 
     let finalSessionData: any = null;
-    if (save_strategy !== 'never') {
-      try { finalSessionData = await context.storageState(); } catch { }
-    }
+    if (save_strategy !== 'never') { try { finalSessionData = await context.storageState(); } catch { } }
 
     if (browser && browser.isConnected()) await browser.close();
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("app-closed", args.id);
-    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app-closed", args.id);
 
     return { success: true, session_data: finalSessionData };
 
@@ -319,55 +316,9 @@ ipcMain.handle('launch-app', async (event, args) => {
 });
 
 ipcMain.handle('apps:kill-all', async () => {
-  for (const browser of activeBrowsers) {
-    if (browser.isConnected()) await browser.close().catch(() => { });
-  }
+  for (const browser of activeBrowsers) { if (browser.isConnected()) await browser.close().catch(() => { }); }
   activeBrowsers.clear();
   return true;
 });
 
-ipcMain.handle('downloads:open-folder', async (event, filePath) => {
-  if (filePath) shell.showItemInFolder(filePath);
-});
-
-const createWindow = () => {
-  const platform = process.platform === 'win32' ? 'WINDOWS' : process.platform === 'darwin' ? 'MAC' : 'LINUX';
-  const arch = os.arch().toUpperCase();
-  const windowTitle = `NINJABR - Versão ${pkg.version} - ${platform} / ${arch}`;
-
-  mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    title: windowTitle,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-    },
-  });
-
-  // Remover Menu Bar
-  mainWindow.setMenu(null);
-
-  // Forçar o título (algumas vezes o loadURL ou o HTML podem sobrescrever)
-  mainWindow.on('page-title-updated', (e) => e.preventDefault());
-
-  // Desativar DevTools (Ctrl+Shift+I) e outros atalhos
-  mainWindow.webContents.on('before-input-event', (event, input) => {
-    if ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i') {
-      event.preventDefault();
-    }
-    if (input.key === 'F12') {
-      event.preventDefault();
-    }
-  });
-
-  // Impedir abertura do DevTools por qualquer meio
-  mainWindow.webContents.on('devtools-opened', () => {
-    mainWindow.webContents.closeDevTools();
-  });
-
-  mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
-};
-
-app.on('ready', createWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+ipcMain.handle('downloads:open-folder', async (event, filePath) => { if (filePath) shell.showItemInFolder(filePath); });
