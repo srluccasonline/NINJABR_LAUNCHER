@@ -9,7 +9,7 @@
     "url": "https://github.com/srluccasonline/NINJABR_LAUNCHER"
   },
   "scripts": {
-    "start": "electron-forge start",
+    "start": "electron-forge start -- --js-flags=\"--max-old-space-size=8096\"",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
