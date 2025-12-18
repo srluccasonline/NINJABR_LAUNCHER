@@ -6,6 +6,8 @@ import path from 'path';
 import os from 'os';
 import pkg from '../package.json';
 
+const IS_DEV = process.env.DEV === 'true' || !app.isPackaged;
+
 // ==========================================================
 // 1. AUTO UPDATE (SOMENTE WINDOWS)
 // ==========================================================
@@ -26,9 +28,11 @@ const BROWSERS_PATH = app.isPackaged
 
 process.env.PLAYWRIGHT_BROWSERS_PATH = path.resolve(BROWSERS_PATH);
 
-console.log(`🔧 [SETUP] Playwright Browsers Path: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
-console.log(`✅ [CHECK] Chromium Executable: ${chromium.executablePath()}`);
-console.log(`💻 [SYSTEM] OS: ${process.platform} | Arch: ${os.arch()} | Runtime Arch: ${process.arch}`);
+if (IS_DEV) {
+  console.log(`🔧 [SETUP] Playwright Browsers Path: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+  console.log(`✅ [CHECK] Chromium Executable: ${chromium.executablePath()}`);
+  console.log(`💻 [SYSTEM] OS: ${process.platform} | Arch: ${os.arch()} | Runtime Arch: ${process.arch}`);
+}
 
 // Mantendo o limite de memória em 4GB para evitar OOM
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
@@ -46,8 +50,8 @@ const createWindow = () => {
   const windowTitle = `NINJABR - Versão ${pkg.version} - ${platformName} / ${archName}`;
 
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1024,
+    height: 768,
     title: windowTitle,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -67,7 +71,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
 ipcMain.handle('launch-app', async (event, args) => {
-  console.log("📥 [IPC] launch-app:", args.name);
+  if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
 
   let browser: Browser | null = null;
 
@@ -103,13 +107,14 @@ ipcMain.handle('launch-app', async (event, args) => {
         username: proxy_data.username,
         password: proxy_data.password
       };
-      console.log(`🌐 [PROXY] Usando: ${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port} (User: ${proxy_data.username})`);
+      if (IS_DEV) console.log(`🌐 [PROXY] Usando: ${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port} (User: ${proxy_data.username})`);
     }
 
     // LANÇAR NAVEGADOR
     // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
     browser = await chromium.launch({
-      headless: false
+      headless: false,
+      args: ['--start-maximized']
     });
     activeBrowsers.add(browser);
 
@@ -119,7 +124,7 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     const contextOptions: any = {
       proxy: proxyConfig,
-      viewport: { width: 1280, height: 720 },
+      viewport: null,
       locale: 'pt-BR',
       acceptDownloads: true
     };
@@ -129,48 +134,56 @@ ipcMain.handle('launch-app', async (event, args) => {
         let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
         if (storageState.session_data) storageState = storageState.session_data;
         contextOptions.storageState = storageState;
-        console.log("📂 Sessão carregada.");
-      } catch (e) { console.error("❌ Erro sessão:", e); }
+        if (IS_DEV) console.log("📂 Sessão carregada.");
+      } catch (e) { if (IS_DEV) console.error("❌ Erro sessão:", e); }
     }
 
     const context = await browser.newContext(contextOptions);
     context.setDefaultTimeout(60000); // 60 segundos de timeout global
 
-    // SEGURANÇA CDP
-    const isUrlForbidden = (url: string) => {
-      const u = url.toLowerCase();
-      if (u.startsWith('chrome://')) {
-        if (u.startsWith('chrome://downloads') || u.startsWith('chrome://print')) return false;
-        return true;
-      }
-      if (u.startsWith('devtools://')) return true;
-      if (u.includes('chromewebstore.google.com')) return true;
-      if (normalizedUrlBlocks.length > 0) {
-        for (const block of normalizedUrlBlocks) {
-          const cleanBlock = block.replace(/\*/g, '').toLowerCase();
-          if (cleanBlock && u.includes(cleanBlock)) return true;
-        }
-      }
-      return false;
-    };
-
+    // =================================================================
+    // DOMAIN LOCKING (WHITELIST)
+    // =================================================================
+    let allowedHost = '';
     try {
-      const client = await browser.newBrowserCDPSession();
-      await client.send('Target.setDiscoverTargets', { discover: true });
-      client.on('Target.targetCreated', async ({ targetInfo }) => {
-        if (isUrlForbidden(targetInfo.url)) {
-          try { await client.send('Target.closeTarget', { targetId: targetInfo.targetId }); } catch (e) { }
-        }
-      });
-      client.on('Target.targetInfoChanged', async ({ targetInfo }) => {
-        if (isUrlForbidden(targetInfo.url)) {
-          try { await client.send('Target.closeTarget', { targetId: targetInfo.targetId }); } catch (e) { }
-        }
-      });
-      console.log("🛡️ Segurança CDP Ativada");
-    } catch (e) { console.error("❌ Falha CDP:", e); }
+      allowedHost = new URL(TARGET_URL).hostname;
+    } catch (e) { }
 
+    if (allowedHost) {
+      await context.route('**/*', (route, request) => {
+        const url = request.url();
+        const isNavigation = request.isNavigationRequest();
+        const isMainFrame = request.frame() === null || request.frame()?.parentFrame() === null;
+
+        if (isNavigation && isMainFrame) {
+          try {
+            const u = new URL(url);
+            const currentHost = u.hostname.toLowerCase();
+
+            // Permitir se for o mesmo host ou subdomínio
+            const isAllowed = currentHost === allowedHost || currentHost.endsWith('.' + allowedHost);
+
+            // Permitir about:blank e esquemas internos seguros
+            const isSafeInternal = url === 'about:blank' || url.startsWith('blob:') || url.startsWith('data:');
+
+            if (!isAllowed && !isSafeInternal) {
+              if (IS_DEV) console.log(`🚫 [BLOCK] Navegação bloqueada: ${url} (Fora de ${allowedHost})`);
+              return route.abort();
+            }
+          } catch (e) {
+            return route.abort();
+          }
+        }
+        return route.continue();
+      });
+    }
+
+
+    // =================================================================
     // BROWSER-SIDE INJECTION
+    // =================================================================
+
+    // 2. Regras uBlock e Autofill (Dinâmico via evaluate)
     const parseUblockRules = (rules: string[]) => {
       return rules.map(r => {
         r = r.trim();
@@ -189,53 +202,39 @@ ipcMain.handle('launch-app', async (event, args) => {
       try {
         await p.evaluate((params) => {
           const { rules, user, pass, selUser, selPass, selBtn, isAutofill } = params;
-          if (!document.getElementById('ninja-injected-styles')) {
+
+          if (!document.getElementById('ninja-ublock-styles')) {
             const currentHost = window.location.hostname;
-            const activeSelectors = rules.filter(r => !r.domain || currentHost.includes(r.domain)).map(r => r.selector);
+            const activeSelectors = rules
+              .filter(r => !r.domain || currentHost.includes(r.domain))
+              .map(r => r.selector);
+
             const cssRules = activeSelectors.join(', ');
-            let css = `input[type="password"], input[data-protected-password="true"] { -webkit-text-security: disc !important; text-security: disc !important; user-select: none !important; filter: blur(5px) !important; }`;
-            if (cssRules) css += ` ${cssRules} { display: none !important; opacity: 0 !important; }`;
-            const style = document.createElement('style');
-            style.id = 'ninja-injected-styles';
-            style.innerHTML = css;
-            (document.head || document.documentElement).appendChild(style);
+            if (cssRules) {
+              const style = document.createElement('style');
+              style.id = 'ninja-ublock-styles';
+              style.innerHTML = `${cssRules} { display: none !important; opacity: 0 !important; }`;
+              (document.head || document.documentElement).appendChild(style);
+            }
           }
-          if (!window.ninjaInitialized) {
-            window.ninjaInitialized = true;
-            document.addEventListener('copy', (e) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
-            const protect = (el) => {
-              if (el.tagName === 'INPUT') {
-                if (el.type === 'password') el.setAttribute('data-protected-password', 'true');
-                if (el.getAttribute('data-protected-password') === 'true' && el.type !== 'password') el.type = 'password';
-              }
-            };
-            const observer = new MutationObserver((mutations) => {
-              for (const m of mutations) {
-                if (m.type === 'attributes' && m.attributeName === 'type') protect(m.target);
-                if (m.type === 'childList') {
-                  m.addedNodes.forEach((node) => {
-                    if (node.tagName === 'INPUT') protect(node);
-                    if (node.querySelectorAll) node.querySelectorAll('input').forEach(protect);
-                  });
-                }
-              }
-            });
-            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['type'], childList: true, subtree: true });
-            document.querySelectorAll('input').forEach(protect);
+
+          const win = window as any;
+          if (!win.ninjaAutofillInitialized) {
+            win.ninjaAutofillInitialized = true;
             if (isAutofill && user && pass) {
               let hasLoggedIn = false;
               const interval = setInterval(() => {
                 if (hasLoggedIn) { clearInterval(interval); return; }
-                const elUser = document.querySelector(selUser);
-                const elPass = document.querySelector(selPass);
+                const elUser = document.querySelector(selUser) as any;
+                const elPass = document.querySelector(selPass) as any;
                 if (elUser || elPass) {
                   if (elUser && elUser.value !== user) {
                     elUser.value = user;
                     elUser.dispatchEvent(new Event('input', { bubbles: true }));
                     elUser.dispatchEvent(new Event('change', { bubbles: true }));
-                    if (!elPass) { const btn = document.querySelector(selBtn); if (btn) btn.click(); }
+                    if (!elPass) { const btn = document.querySelector(selBtn) as any; if (btn) btn.click(); }
                   }
-                  const elPassActual = document.querySelector(selPass);
+                  const elPassActual = document.querySelector(selPass) as any;
                   if (elPassActual && elPassActual.value === '') {
                     elPassActual.value = pass;
                     elPassActual.dispatchEvent(new Event('input', { bubbles: true }));
@@ -262,7 +261,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     // DOWNLOAD HANDLER
     const setupDownloadHandler = (p: Page) => {
       p.on('download', async (download: Download) => {
-        console.log("📥 Download detectado:", download.suggestedFilename());
+        if (IS_DEV) console.log("📥 Download detectado:", download.suggestedFilename());
         if (mainWindow && !mainWindow.isDestroyed()) {
           const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
             title: 'Salvar Arquivo',
@@ -270,11 +269,11 @@ ipcMain.handle('launch-app', async (event, args) => {
             buttonLabel: 'Salvar',
           });
           if (!canceled && filePath) {
-            console.log("💾 Salvando em:", filePath);
+            if (IS_DEV) console.log("💾 Salvando em:", filePath);
             await download.saveAs(filePath).catch(() => { });
-            console.log("✅ Download concluído.");
+            if (IS_DEV) console.log("✅ Download concluído.");
           } else {
-            console.log("❌ Download cancelado.");
+            if (IS_DEV) console.log("❌ Download cancelado.");
             await download.cancel().catch(() => { });
           }
         } else {
@@ -291,7 +290,8 @@ ipcMain.handle('launch-app', async (event, args) => {
     });
 
     const page = await context.newPage();
-    console.log(`Navegando para ${TARGET_URL}...`);
+
+    if (IS_DEV) console.log(`Navegando para ${TARGET_URL}...`);
 
     try {
       await page.goto(TARGET_URL, {
@@ -299,13 +299,13 @@ ipcMain.handle('launch-app', async (event, args) => {
         waitUntil: 'domcontentloaded'
       });
     } catch (gotoError: any) {
-      console.error("⚠️ Erro no page.goto:", gotoError.message);
+      if (IS_DEV) console.error("⚠️ Erro no page.goto:", gotoError.message);
       // Não damos throw aqui para tentar manter a página aberta para o usuário ver o erro do browser
     }
 
     await new Promise<void>((resolve) => {
-      page.on('close', () => { console.log("🚪 Página fechada."); resolve(); });
-      browser?.on('disconnected', () => { console.log("🚪 Browser desconectado."); resolve(); });
+      page.on('close', () => { if (IS_DEV) console.log("🚪 Página fechada."); resolve(); });
+      browser?.on('disconnected', () => { if (IS_DEV) console.log("🚪 Browser desconectado."); resolve(); });
     });
 
     let finalSessionData: any = null;
@@ -317,7 +317,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     return { success: true, session_data: finalSessionData };
 
   } catch (error: any) {
-    console.error("Erro:", error);
+    if (IS_DEV) console.error("Erro:", error);
     if (browser && browser.isConnected()) await browser.close().catch(() => { });
     return { success: false, error: error.message };
   }
