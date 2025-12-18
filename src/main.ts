@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { updateElectronApp } from 'update-electron-app';
-import type { Browser, Page } from 'patchright';
+import type { Browser, Page, Download } from 'patchright';
 import { chromium } from 'patchright';
 import path from 'path';
 
@@ -72,7 +72,8 @@ ipcMain.handle('launch-app', async (event, args) => {
     const contextOptions: any = {
       proxy: proxyConfig,
       viewport: { width: 1280, height: 720 },
-      locale: 'pt-BR'
+      locale: 'pt-BR',
+      acceptDownloads: true
     };
 
     // 4. Carregar Sessão
@@ -124,7 +125,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     } catch (e) { console.error("❌ Falha CDP:", e); }
 
     // =================================================================
-    // BROWSER-SIDE INJECTION (Alternative to addInitScript)
+    // BROWSER-SIDE INJECTION
     // =================================================================
     const parseUblockRules = (rules: string[]) => {
       return rules.map(r => {
@@ -145,7 +146,6 @@ ipcMain.handle('launch-app', async (event, args) => {
         await p.evaluate((params) => {
           const { rules, user, pass, selUser, selPass, selBtn, isAutofill } = params;
 
-          // 1. Inject CSS
           if (!document.getElementById('ninja-injected-styles')) {
             const currentHost = window.location.hostname;
             const activeSelectors = rules
@@ -169,7 +169,6 @@ ipcMain.handle('launch-app', async (event, args) => {
             (document.head || document.documentElement).appendChild(style);
           }
 
-          // 2. Password Protection
           if (!window.ninjaInitialized) {
             window.ninjaInitialized = true;
             document.addEventListener('copy', (e) => { if (e.target?.type === 'password') e.preventDefault(); }, true);
@@ -197,7 +196,6 @@ ipcMain.handle('launch-app', async (event, args) => {
             observer.observe(document.documentElement, { attributes: true, attributeFilter: ['type'], childList: true, subtree: true });
             document.querySelectorAll('input').forEach(protect);
 
-            // 3. Autofill Loop (Inside Browser)
             if (isAutofill && user && pass) {
               let hasLoggedIn = false;
               const interval = setInterval(() => {
@@ -245,14 +243,43 @@ ipcMain.handle('launch-app', async (event, args) => {
       } catch (e) { }
     };
 
+    // =================================================================
+    // DOWNLOAD HANDLER (Save As Dialog)
+    // =================================================================
+    const setupDownloadHandler = (p: Page) => {
+      p.on('download', async (download: Download) => {
+        console.log("📥 Download detectado:", download.suggestedFilename());
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Salvar Arquivo',
+            defaultPath: path.join(app.getPath('downloads'), download.suggestedFilename()),
+            buttonLabel: 'Salvar',
+          });
+
+          if (!canceled && filePath) {
+            console.log("💾 Salvando em:", filePath);
+            await download.saveAs(filePath).catch(() => { });
+            console.log("✅ Download concluído.");
+          } else {
+            console.log("❌ Download cancelado pelo usuário.");
+            await download.cancel().catch(() => { });
+          }
+        } else {
+          // Fallback se a janela principal sumir
+          const defaultPath = path.join(app.getPath('downloads'), download.suggestedFilename());
+          await download.saveAs(defaultPath).catch(() => { });
+        }
+      });
+    };
+
     context.on('page', (p) => {
       p.on('domcontentloaded', () => injectBrowserScript(p));
       p.on('framenavigated', () => injectBrowserScript(p));
+      setupDownloadHandler(p);
     });
 
     const page = await context.newPage();
-    page.on('domcontentloaded', () => injectBrowserScript(page));
-    page.on('framenavigated', () => injectBrowserScript(page));
 
     console.log(`Navegando para ${TARGET_URL}...`);
     await page.goto(TARGET_URL);
