@@ -322,25 +322,29 @@ ipcMain.handle('launch-app', async (event, args) => {
 
             const applyMarker = (root: Node = document) => {
               const processElement = (el: any) => {
-                const isPassword =
-                  el.matches('input[type="password"]') ||
-                  (el.matches('input') && (
-                    (el.name && el.name.toLowerCase().includes('pass')) ||
-                    (el.id && el.id.toLowerCase().includes('pass')) ||
-                    (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
-                    (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
-                  ));
+                try {
+                  const isPassword =
+                    el.matches('input[type="password"]') ||
+                    (el.matches('input') && (
+                      (el.name && el.name.toLowerCase().includes('pass')) ||
+                      (el.id && el.id.toLowerCase().includes('pass')) ||
+                      (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
+                      (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
+                    ));
 
-                if (isPassword) {
-                  if (!el.hasAttribute('data-ninja-protected')) {
-                    el.setAttribute('data-ninja-protected', 'true');
+                  if (isPassword) {
+                    if (!el.hasAttribute('data-ninja-protected')) {
+                      el.setAttribute('data-ninja-protected', 'true');
+                    }
+                    // RE-ASSERT STYLES ALWAYS (Prevent override by JS/CSS)
                     el.style.setProperty('filter', 'blur(8px)', 'important');
                     el.style.setProperty('-webkit-text-security', 'disc', 'important');
+                    el.style.setProperty('text-security', 'disc', 'important');
                     el.style.setProperty('color', 'transparent', 'important');
                     el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
                   }
-                }
-                if (el.shadowRoot) applyMarker(el.shadowRoot);
+                  if (el.shadowRoot) applyMarker(el.shadowRoot);
+                } catch (e) { }
               };
 
               processElement(root);
@@ -352,49 +356,68 @@ ipcMain.handle('launch-app', async (event, args) => {
               const style = document.createElement('style');
               style.id = INJECT_ID;
               style.innerHTML = `
-              html body input[type="password"], 
-              html body input[data-ninja-protected="true"] {
-                filter: blur(8px) !important;
-                -webkit-text-security: disc !important;
-                text-security: disc !important;
-                color: transparent !important;
-                text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
-                border: 2px solid red !important;
-              }
-              input::-ms-reveal, input::-ms-clear, input::-webkit-credentials-auto-fill-button {
-                display: none !important;
-              }
-            `;
+                html body input[type="password"], 
+                html body input[data-ninja-protected="true"] {
+                  filter: blur(8px) !important;
+                  -webkit-text-security: disc !important;
+                  text-security: disc !important;
+                  color: transparent !important;
+                  text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
+                  border: 2px solid red !important;
+                }
+                input::-ms-reveal, input::-ms-clear, input::-webkit-credentials-auto-fill-button {
+                  display: none !important;
+                }
+              `;
               (document.head || document.documentElement).appendChild(style);
 
-              // Iniciar Observador e Intervalos (Apenas uma vez por página/frame)
+              // 1. Initial Apply
               applyMarker();
+
+              // 2. Observer (Now watching STYLE changes too)
               const observer = new MutationObserver((mutations) => {
                 for (const m of mutations) {
                   if (m.addedNodes.length) {
                     m.addedNodes.forEach(node => { if (node.nodeType === 1) applyMarker(node); });
                   }
                   if (m.type === 'attributes' && (m.target as HTMLElement).nodeName === 'INPUT') {
+                    // Se mudar style ou type, reaplica proteção imediatamente
                     applyMarker(m.target);
                   }
                 }
               });
               observer.observe(document.documentElement, {
                 childList: true, subtree: true, attributes: true,
-                attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label']
+                attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label', 'style']
               });
 
-              setInterval(() => applyMarker(), 1000); // Polling mais leve
+              // 3. Super Aggressive Polling (100ms)
+              setInterval(() => applyMarker(), 1000); // Scan geral lento para novos elementos
               setInterval(() => {
-                const forcePasswordType = (root: Node = document) => {
+                const enforceSecurity = (root: Node = document) => {
+                  // Apenas elementos JÁ marcados para ser extremamente rápido
                   const query = 'input[data-ninja-protected="true"]';
                   const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
-                  elements.forEach((el: any) => { if (el.type !== 'password') el.type = 'password'; });
+
+                  elements.forEach((el: any) => {
+                    // 1. Força Tipo Password
+                    if (el.type !== 'password') el.type = 'password';
+
+                    // 2. Força Estilos (caso tenha sido removido via inline style)
+                    if (el.style.filter !== 'blur(8px)') {
+                      el.style.setProperty('filter', 'blur(8px)', 'important');
+                      el.style.setProperty('-webkit-text-security', 'disc', 'important');
+                      el.style.setProperty('text-security', 'disc', 'important');
+                      el.style.setProperty('color', 'transparent', 'important');
+                    }
+                  });
+
+                  // Recursão para Shadow DOM
                   const all = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
-                  all.forEach((el: any) => { if (el.shadowRoot) forcePasswordType(el.shadowRoot); });
+                  all.forEach((el: any) => { if (el.shadowRoot) enforceSecurity(el.shadowRoot); });
                 };
-                forcePasswordType();
-              }, 500);
+                enforceSecurity();
+              }, 100); // 100ms polling para vencer qualquer script de reveal
             }
           }
 
