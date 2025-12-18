@@ -1,7 +1,7 @@
 {
   "name": "NINJABR",
   "productName": "NINJABR",
-  "version": "1.0.19",
+  "version": "2.0.0",
   "description": "NinjaBR - Browser Anti Detecção",
   "main": ".vite/build/main.js",
   "repository": {
@@ -9,7 +9,7 @@
     "url": "https://github.com/srluccasonline/NINJABR_LAUNCHER"
   },
   "scripts": {
-    "start": "electron-forge start -- --js-flags=\"--max-old-space-size=8096\"",
+    "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
