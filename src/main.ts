@@ -3,6 +3,8 @@ import { updateElectronApp } from 'update-electron-app';
 import type { Browser, Page, Download } from 'patchright';
 import { chromium } from 'patchright';
 import path from 'path';
+import os from 'os';
+import pkg from '../package.json';
 
 updateElectronApp();
 
@@ -329,14 +331,41 @@ ipcMain.handle('downloads:open-folder', async (event, filePath) => {
 });
 
 const createWindow = () => {
+  const platform = process.platform === 'win32' ? 'WINDOWS' : process.platform === 'darwin' ? 'MAC' : 'LINUX';
+  const arch = os.arch().toUpperCase();
+  const windowTitle = `NINJABR - Versão ${pkg.version} - ${platform} / ${arch}`;
+
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    title: windowTitle,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
     },
   });
+
+  // Remover Menu Bar
+  mainWindow.setMenu(null);
+
+  // Forçar o título (algumas vezes o loadURL ou o HTML podem sobrescrever)
+  mainWindow.on('page-title-updated', (e) => e.preventDefault());
+
+  // Desativar DevTools (Ctrl+Shift+I) e outros atalhos
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i') {
+      event.preventDefault();
+    }
+    if (input.key === 'F12') {
+      event.preventDefault();
+    }
+  });
+
+  // Impedir abertura do DevTools por qualquer meio
+  mainWindow.webContents.on('devtools-opened', () => {
+    mainWindow.webContents.closeDevTools();
+  });
+
   mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
 };
 
