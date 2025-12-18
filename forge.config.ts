@@ -14,7 +14,7 @@ import path from 'path';
 const config: ForgeConfig = {
   hooks: {
     packageAfterPrune: async (_config, buildPath) => {
-      const modulesToCopy = ['patchright', 'patchright-core'];
+      const modulesToCopy = ['patchright', 'patchright-core', 'electron-squirrel-startup', 'update-electron-app'];
       for (const moduleName of modulesToCopy) {
         const src = path.resolve(__dirname, 'node_modules', moduleName);
         const dest = path.join(buildPath, 'node_modules', moduleName);

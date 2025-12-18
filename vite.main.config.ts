@@ -4,8 +4,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
     build: {
         rollupOptions: {
-            // Adicionei playwright-core por segurança
-            external: ['patchright', 'patchright-core'],
+            // Adicionei módulos que precisam ser externos e copiados manualmente
+            external: ['patchright', 'patchright-core', 'electron-squirrel-startup', 'update-electron-app'],
         },
     },
 });
