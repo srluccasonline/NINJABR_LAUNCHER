@@ -14,7 +14,8 @@ import path from 'path';
 const config: ForgeConfig = {
   hooks: {
     packageAfterPrune: async (_config, buildPath) => {
-      const modulesToCopy = ['patchright', 'patchright-core', 'electron-squirrel-startup', 'update-electron-app', 'ms'];
+      // Revertido para copiar apenas o patchright, pois o resto será "bundled" pelo Vite
+      const modulesToCopy = ['patchright', 'patchright-core'];
       for (const moduleName of modulesToCopy) {
         const src = path.resolve(__dirname, 'node_modules', moduleName);
         const dest = path.join(buildPath, 'node_modules', moduleName);

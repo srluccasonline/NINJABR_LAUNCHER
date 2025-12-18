@@ -5,6 +5,7 @@ import { chromium } from 'patchright';
 import path from 'path';
 import os from 'os';
 import pkg from '../package.json';
+import squirrelStartup from 'electron-squirrel-startup';
 
 const IS_DEV = process.env.DEV === 'true' || !app.isPackaged;
 
@@ -37,7 +38,7 @@ if (IS_DEV) {
 // Mantendo o limite de memória em 4GB para evitar OOM
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
-if (require('electron-squirrel-startup')) {
+if (squirrelStartup) {
   app.quit();
 }
 

@@ -4,8 +4,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
     build: {
         rollupOptions: {
-            // Adicionei módulos que precisam ser externos e copiados manualmente
-            external: ['patchright', 'patchright-core', 'electron-squirrel-startup', 'update-electron-app', 'ms'],
+            // Apenas patchright deve ser externo (binários nativos)
+            external: ['patchright', 'patchright-core'],
         },
     },
 });
