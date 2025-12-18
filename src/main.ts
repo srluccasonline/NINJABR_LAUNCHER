@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { updateElectronApp } from 'update-electron-app';
 import type { Browser, Page, Download } from 'patchright';
-import { chromium } from 'patchright';
 import path from 'path';
 import os from 'os';
 import pkg from '../package.json';
@@ -28,6 +27,9 @@ const BROWSERS_PATH = app.isPackaged
   : path.join(__dirname, '../../browsers');
 
 process.env.PLAYWRIGHT_BROWSERS_PATH = path.resolve(BROWSERS_PATH);
+
+// IMPORTANT: Require 'patchright' AFTER setting the env var, otherwise it ignores the custom path!
+const { chromium } = require('patchright');
 
 if (IS_DEV) {
   console.log(`🔧 [SETUP] Playwright Browsers Path: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
