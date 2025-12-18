@@ -87,7 +87,8 @@ ipcMain.handle('launch-app', async (event, args) => {
       url_blocks,
       save_strategy = 'never',
       login_selector,
-      password_selector
+      password_selector,
+      is_debug = false // NOVA FLAG: Se true, desativa proteção de senha e bloqueio de URL
     } = args;
 
     const normalizeInput = (input: any): string[] => {
@@ -112,11 +113,51 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     // LANÇAR NAVEGADOR
     // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
+    const launchArgs = ['--start-maximized'];
+    if (!is_debug) {
+      launchArgs.push('--disable-devtools');
+    }
+
     browser = await chromium.launch({
       headless: false,
-      args: ['--start-maximized']
+      args: launchArgs
     });
     activeBrowsers.add(browser);
+
+    // =================================================================
+    // BROWSER-LEVEL SECURITY BLOCK (DEVTOOLS KILLER) - NON-BLOCKING
+    // =================================================================
+    if (!is_debug) {
+      try {
+        const browserClient = await browser.newBrowserCDPSession();
+
+        // Ativa auto-attach para monitorar novos alvos, mas SEM pausar no nascimento (waitForDebuggerOnStart: false)
+        await browserClient.send('Target.setAutoAttach', {
+          autoAttach: true,
+          waitForDebuggerOnStart: false,
+          flatten: true
+        });
+
+        browserClient.on('Target.attachedToTarget', async (params: any) => {
+          const { targetInfo } = params;
+          const url = targetInfo.url || '';
+          const type = targetInfo.type;
+
+          const isForbidden =
+            type === 'devtools' ||
+            url.startsWith('devtools://') ||
+            url.startsWith('chrome://') ||
+            url.startsWith('edge://');
+
+          if (isForbidden) {
+            if (IS_DEV) console.log(`🚫 [BROWSER-CDP] Matando alvo proibido: ${url} (${type})`);
+            await browserClient.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => { });
+          }
+        });
+      } catch (e) {
+        if (IS_DEV) console.error("⚠️ Erro ao iniciar Browser-Level CDP:", e);
+      }
+    }
 
     browser.on('disconnected', () => {
       if (browser) activeBrowsers.delete(browser);
@@ -142,205 +183,89 @@ ipcMain.handle('launch-app', async (event, args) => {
     context.setDefaultTimeout(60000); // 60 segundos de timeout global
 
     // =================================================================
-    // CDP SECURITY (URL BLOCKING)
+    // ZERO-DELAY UI LOCK - REMOVIDO addInitScript para evitar travamentos
     // =================================================================
-    try {
-      const page = await context.newPage(); // Create page first to get CDP session
-      const client = await context.newCDPSession(page);
-      await client.send('Target.setDiscoverTargets', { discover: true });
+    // Bloqueios de teclado movidos para o injectBrowserScript (page.evaluate)
+    // Bloqueio de contextmenu removido a pedido do usuário para não travar downloads
 
-      const checkTarget = async (targetInfo: any) => {
-        const url = targetInfo.url || '';
-        const type = targetInfo.type;
+    // =================================================================
+    // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
+    // =================================================================
+    if (!is_debug) {
+      try {
+        const page = await context.newPage(); // Create page first to get CDP session
+        const client = await context.newCDPSession(page);
+        await client.send('Target.setDiscoverTargets', { discover: true });
 
-        // CRITICAL: Allow downloads (type 'other' or empty URL often indicates download)
-        if (type === 'other' || (type === 'page' && url === '')) {
-          return;
-        }
+        const checkTarget = async (targetInfo: any) => {
+          const url = targetInfo.url || '';
+          const type = targetInfo.type;
 
-        const isForbidden =
-          url.startsWith('chrome://') ||
-          url.startsWith('devtools://') ||
-          url.startsWith('edge://') ||
-          (url.startsWith('about:') && url !== 'about:blank');
+          // CRITICAL: Allow downloads (type 'other' or empty URL often indicates download)
+          if (type === 'other' || (type === 'page' && url === '')) {
+            return;
+          }
 
-        if (isForbidden) {
-          if (IS_DEV) console.log(`🚫 [CDP] Bloqueando alvo proibido: ${url}`);
+          const isForbidden =
+            url.startsWith('chrome://') ||
+            url.startsWith('devtools://') ||
+            url.startsWith('edge://') ||
+            (url.startsWith('about:') && url !== 'about:blank');
+
+          if (isForbidden) {
+            if (IS_DEV) console.log(`🚫 [CDP] Bloqueando alvo proibido: ${url}`);
+            try {
+              await client.send('Target.closeTarget', { targetId: targetInfo.targetId });
+            } catch (e) { /* Ignore if already closed */ }
+          }
+        };
+
+        client.on('Target.targetCreated', async (params: any) => checkTarget(params.targetInfo));
+
+        // FIX: Substituindo targetInfoChanged por Polling para evitar Buffer Overflow em downloads
+        // client.on('Target.targetInfoChanged', async (params: any) => checkTarget(params.targetInfo));
+
+        setInterval(async () => {
           try {
-            await client.send('Target.closeTarget', { targetId: targetInfo.targetId });
-          } catch (e) { /* Ignore if already closed */ }
-        }
-      };
+            const pages = context.pages();
+            for (const p of pages) {
+              const url = p.url();
+              const isForbidden =
+                url.startsWith('chrome://') ||
+                url.startsWith('devtools://') ||
+                url.startsWith('edge://') ||
+                url.startsWith('chrome-extension://') ||
+                url.startsWith('edge-extension://');
 
-      client.on('Target.targetCreated', async (params: any) => checkTarget(params.targetInfo));
-      client.on('Target.targetInfoChanged', async (params: any) => checkTarget(params.targetInfo));
-    } catch (e) {
-      if (IS_DEV) console.error("⚠️ Falha ao iniciar CDP:", e);
+              if (isForbidden) {
+                if (IS_DEV) console.log(`🚫 [POLLING] Bloqueando URL proibida: ${url}`);
+                await p.close().catch(() => { });
+              }
+            }
+          } catch (e) { }
+        }, 300); // Polling Ultra-Agressivo (300ms) para fechar inspeção instantaneamente
+
+      } catch (e) {
+        if (IS_DEV) console.error("⚠️ Falha ao iniciar CDP:", e);
+      }
+    } else {
+      if (IS_DEV) console.log("⚠️ [DEBUG MODE] Proteções CDP (URL Blocking) DESATIVADAS.");
     }
 
-    // =================================================================
-    // EFFECTIVE PASSWORD BLURRING (RESILIENT MODE)
-    // =================================================================
-    await context.addInitScript(() => {
-      const INJECT_ID = 'ninja-resilient-blur';
 
-      const applyMarker = (root: Node = document) => {
-        const processElement = (el: any) => {
-          // Heurística Agressiva: Type password OU nome/id/placeholder/aria-label contendo "pass"
-          const isPassword =
-            el.matches('input[type="password"]') ||
-            (el.matches('input') && (
-              (el.name && el.name.toLowerCase().includes('pass')) ||
-              (el.id && el.id.toLowerCase().includes('pass')) ||
-              (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
-              (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
-            ));
-
-          if (isPassword) {
-            if (!el.hasAttribute('data-ninja-protected')) {
-              el.setAttribute('data-ninja-protected', 'true');
-              // NUCLEAR OPTION: Transparente + Sombra + Blur
-              el.style.setProperty('filter', 'blur(8px)', 'important');
-              el.style.setProperty('-webkit-text-security', 'disc', 'important');
-              el.style.setProperty('color', 'transparent', 'important');
-              el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
-            }
-          }
-          // Shadow DOM Support
-          if (el.shadowRoot) {
-            applyMarker(el.shadowRoot);
-          }
-        };
-
-        // 1. Verifica o próprio elemento (root)
-        processElement(root);
-
-        // 2. Verifica descendentes
-        const query = 'input'; // Pega todos inputs e filtra na função
-        const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
-        elements.forEach((el: any) => processElement(el));
-      };
-
-      // 1. CSS de Alta Especificidade e Text-Security
-      if (!document.getElementById(INJECT_ID)) {
-        const style = document.createElement('style');
-        style.id = INJECT_ID;
-        style.innerHTML = `
-          html body input[type="password"], 
-          html body input[data-ninja-protected="true"] {
-            filter: blur(8px) !important;
-            -webkit-text-security: disc !important;
-            text-security: disc !important;
-            color: transparent !important;
-            text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
-          }
-          /* Proteção total em todos os estados */
-          html body input[data-ninja-protected="true"]:focus,
-          html body input[data-ninja-protected="true"]:hover,
-          html body input[data-ninja-protected="true"]:active {
-            filter: blur(8px) !important;
-            -webkit-text-security: disc !important;
-            color: transparent !important;
-            text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
-          }
-          /* Esconder botões nativos de revelar senha */
-          input::-ms-reveal,
-          input::-ms-clear,
-          input::-webkit-credentials-auto-fill-button {
-            display: none !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-          }
-        `;
-        (document.head || document.documentElement).appendChild(style);
-      }
-
-      // 2. Marcar campos existentes e iniciar observador
-      applyMarker();
-
-      const observer = new MutationObserver((mutations) => {
-        for (const m of mutations) {
-          // Novos elementos
-          if (m.addedNodes.length) {
-            m.addedNodes.forEach(node => {
-              if (node.nodeType === 1) applyMarker(node);
-            });
-          }
-          // Mudança de atributos (ex: type mudando de password para text)
-          if (m.type === 'attributes' && (m.target as HTMLElement).nodeName === 'INPUT') {
-            applyMarker(m.target);
-          }
-        }
-      });
-
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label']
-      });
-
-      // 3. Fallback Seguro (500ms) - Reforço para persistência
-      setInterval(() => applyMarker(), 500);
-
-      // 4. AGGRESSIVE TYPE ENFORCEMENT (100ms)
-      // Força bruta: Se achar um campo de senha que virou texto, volta pra senha NA HORA.
-      setInterval(() => {
-        const forcePasswordType = (root: Node = document) => {
-          const query = 'input[data-ninja-protected="true"]';
-          const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
-
-          elements.forEach((el: any) => {
-            if (el.type !== 'password') {
-              el.type = 'password'; // Reverte imediatamente
-            }
-          });
-
-          // Shadow DOM Support
-          const allElements = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
-          allElements.forEach((el: any) => {
-            if (el.shadowRoot) forcePasswordType(el.shadowRoot);
-          });
-        };
-        forcePasswordType();
-      }, 100);
-    });
 
     // =================================================================
-    // DOMAIN LOCKING (WHITELIST)
+    // DOMAIN LOCKING (WHITELIST) - DISABLED BY USER REQUEST
     // =================================================================
-    let allowedHost = '';
-    try {
-      allowedHost = new URL(TARGET_URL).hostname;
-    } catch (e) { }
-
-    if (allowedHost) {
-      await context.route('**/*', (route, request) => {
-        const url = request.url();
-        const isNavigation = request.isNavigationRequest();
-        const isMainFrame = request.frame() === null || request.frame()?.parentFrame() === null;
-
-        if (isNavigation && isMainFrame) {
-          try {
-            const u = new URL(url);
-            const currentHost = u.hostname.toLowerCase();
-
-            // Permitir se for o mesmo host ou subdomínio
-            const isAllowed = currentHost === allowedHost || currentHost.endsWith('.' + allowedHost);
-
-            // Permitir about:blank e esquemas internos seguros
-            const isSafeInternal = url === 'about:blank' || url.startsWith('blob:') || url.startsWith('data:');
-
-            if (!isAllowed && !isSafeInternal) {
-              if (IS_DEV) console.log(`🚫 [BLOCK] Navegação bloqueada: ${url} (Fora de ${allowedHost})`);
-              return route.abort();
-            }
-          } catch (e) {
-            return route.abort();
-          }
-        }
-        return route.continue();
-      });
+    // =================================================================
+    // ROUTING SECURITY (FORBIDDEN URLS) - ATIVO APENAS SE NÃO FOR DEBUG
+    // =================================================================
+    if (!is_debug) {
+      await context.route('devtools://**', route => route.abort());
+      await context.route('chrome://**', route => route.abort());
+      await context.route('edge://**', route => route.abort());
+      await context.route('chrome-extension://**', route => route.abort());
+      await context.route('edge-extension://**', route => route.abort());
     }
 
 
@@ -366,8 +291,111 @@ ipcMain.handle('launch-app', async (event, args) => {
     const injectBrowserScript = async (p: Page) => {
       try {
         await p.evaluate((params) => {
-          const { rules, user, pass, selUser, selPass, selBtn, isAutofill } = params;
+          const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
 
+          // =================================================================
+          // PASSWORD PROTECTION (BLUR & TYPE LOCK) - MOVIDO DE addInitScript PARA page.evaluate
+          // =================================================================
+          if (!isDebug) {
+            const INJECT_ID = 'ninja-resilient-blur';
+
+            const applyMarker = (root: Node = document) => {
+              const processElement = (el: any) => {
+                const isPassword =
+                  el.matches('input[type="password"]') ||
+                  (el.matches('input') && (
+                    (el.name && el.name.toLowerCase().includes('pass')) ||
+                    (el.id && el.id.toLowerCase().includes('pass')) ||
+                    (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
+                    (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
+                  ));
+
+                if (isPassword) {
+                  if (!el.hasAttribute('data-ninja-protected')) {
+                    el.setAttribute('data-ninja-protected', 'true');
+                    el.style.setProperty('filter', 'blur(8px)', 'important');
+                    el.style.setProperty('-webkit-text-security', 'disc', 'important');
+                    el.style.setProperty('color', 'transparent', 'important');
+                    el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
+                  }
+                }
+                if (el.shadowRoot) applyMarker(el.shadowRoot);
+              };
+
+              processElement(root);
+              const allElements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
+              allElements.forEach((el: any) => processElement(el));
+            };
+
+            if (!document.getElementById(INJECT_ID)) {
+              const style = document.createElement('style');
+              style.id = INJECT_ID;
+              style.innerHTML = `
+              html body input[type="password"], 
+              html body input[data-ninja-protected="true"] {
+                filter: blur(8px) !important;
+                -webkit-text-security: disc !important;
+                text-security: disc !important;
+                color: transparent !important;
+                text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
+                border: 2px solid red !important;
+              }
+              input::-ms-reveal, input::-ms-clear, input::-webkit-credentials-auto-fill-button {
+                display: none !important;
+              }
+            `;
+              (document.head || document.documentElement).appendChild(style);
+
+              // Iniciar Observador e Intervalos (Apenas uma vez por página/frame)
+              applyMarker();
+              const observer = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                  if (m.addedNodes.length) {
+                    m.addedNodes.forEach(node => { if (node.nodeType === 1) applyMarker(node); });
+                  }
+                  if (m.type === 'attributes' && (m.target as HTMLElement).nodeName === 'INPUT') {
+                    applyMarker(m.target);
+                  }
+                }
+              });
+              observer.observe(document.documentElement, {
+                childList: true, subtree: true, attributes: true,
+                attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label']
+              });
+
+              setInterval(() => applyMarker(), 1000); // Polling mais leve
+              setInterval(() => {
+                const forcePasswordType = (root: Node = document) => {
+                  const query = 'input[data-ninja-protected="true"]';
+                  const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
+                  elements.forEach((el: any) => { if (el.type !== 'password') el.type = 'password'; });
+                  const all = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
+                  all.forEach((el: any) => { if (el.shadowRoot) forcePasswordType(el.shadowRoot); });
+                };
+                forcePasswordType();
+              }, 500);
+            }
+          }
+
+          if (!isDebug) {
+            // Bloqueio de Atalhos de Inspeção via evaluate
+            window.addEventListener('keydown', (e) => {
+              const isInspect =
+                (e.key === 'F12') ||
+                (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+                (e.ctrlKey && (e.key === 'u' || e.key === 'U'));
+              if (isInspect) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }, true);
+
+            // NOTA: O menu de contexto nativo permanece ativo para permitir downloads e outras ações legítimas.
+          }
+
+          // =================================================================
+          // UBLOCK & AUTOFILL (EXISTENTES)
+          // =================================================================
           if (!document.getElementById('ninja-ublock-styles')) {
             const currentHost = window.location.hostname;
             const activeSelectors = rules
@@ -418,7 +446,8 @@ ipcMain.handle('launch-app', async (event, args) => {
           selUser: login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]',
           selPass: password_selector || 'input[type="password"]',
           selBtn: `button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext`,
-          isAutofill: is_autofill_enabled
+          isAutofill: is_autofill_enabled,
+          isDebug: is_debug
         });
       } catch (e) { }
     };
