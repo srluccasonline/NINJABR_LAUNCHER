@@ -121,6 +121,24 @@ ipcMain.handle('launch-app', async (event, args) => {
       launchArgs.push('--disable-devtools');
     }
 
+    if (IS_DEV || is_debug) {
+      try {
+        console.log(`📂 [DEBUG] Listando arquivos em: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+        const files = require('fs').readdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH);
+        console.log(`📄 Arquivos encontrados: ${files.join(', ')}`);
+
+        // Se houver subpastas (ex: chromium-1234), listar tbm
+        files.forEach((f: string) => {
+          const subPath = path.join(process.env.PLAYWRIGHT_BROWSERS_PATH!, f);
+          if (require('fs').statSync(subPath).isDirectory()) {
+            console.log(`   📂 Dentro de ${f}: ${require('fs').readdirSync(subPath).join(', ')}`);
+          }
+        });
+      } catch (e: any) {
+        console.error(`❌ [DEBUG] Erro ao listar arquivos: ${e.message}`);
+      }
+    }
+
     browser = await chromium.launch({
       headless: false,
       args: launchArgs
