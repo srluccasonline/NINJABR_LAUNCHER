@@ -66,7 +66,7 @@ const createWindow = () => {
   mainWindow.on('page-title-updated', (e) => e.preventDefault());
 
   // Restaurando a URL que apontava antigamente
-  mainWindow.loadURL("https://ninja-painel-dez-2025.vercel.app/");
+  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app");
 };
 
 app.on('ready', createWindow);
