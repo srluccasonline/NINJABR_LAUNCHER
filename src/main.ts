@@ -541,13 +541,66 @@ ipcMain.handle('launch-app', async (event, args) => {
       // Não damos throw aqui para tentar manter a página aberta para o usuário ver o erro do browser
     }
 
+    // =================================================================
+    // ROBUST SESSION SAVING (Last-Known-Good)
+    // =================================================================
+    let lastGoodSessionData: any = null;
+    let saveInterval: NodeJS.Timeout | null = null;
+
+    const tryCaptureSession = async (reason: string) => {
+      if (save_strategy === 'never') return;
+      if (!context || !browser || !browser.isConnected()) return;
+
+      try {
+        if (IS_DEV || is_debug) console.log(`💾 [SESSION] Salvando (${reason})...`);
+
+        // OTIMIZAÇÃO MAXIMA: Ao invés de ler TODO o storageState (que trava a UI em sites pesados)
+        // Ler apenas os COOKIES. É instantâneo e evita o "glitch/reload" de 30s.
+        const cookies = await context.cookies();
+
+        if (cookies && cookies.length > 0) {
+          const optimizedData = {
+            cookies: cookies,
+            origins: []
+          };
+          lastGoodSessionData = optimizedData;
+          if (IS_DEV || is_debug) console.log(`✅ [SESSION] Salvo e Sanitizado (${reason}). Cookies: ${cookies.length}`);
+        }
+      } catch (e: any) {
+        if (IS_DEV || is_debug) console.error(`⚠️ [SESSION] Falha ao salvar (${reason}):`, e.message);
+      }
+    };
+
+    // 1. Salvar periodicamente DESATIVADO a pedido do usuário (salvar apenas no final)
+    // if (save_strategy !== 'never') {
+    //   saveInterval = setInterval(() => tryCaptureSession('periodic'), 30000);
+    // }
+
     await new Promise<void>((resolve) => {
-      page.on('close', () => { if (IS_DEV) console.log("🚪 Página fechada."); resolve(); });
-      browser?.on('disconnected', () => { if (IS_DEV) console.log("🚪 Browser desconectado."); resolve(); });
+      page.on('close', async () => {
+        if (IS_DEV) console.log("🚪 Página fechada.");
+        // Tento salvar uma última vez ANTES de resolver (enquanto o browser ainda existe tecnicamente)
+        await tryCaptureSession('page-close');
+        resolve();
+      });
+      browser?.on('disconnected', () => {
+        if (IS_DEV) console.log("🚪 Browser desconectado.");
+        // Aqui já é tarde demais para salvar, usamos o lastGoodSessionData
+        resolve();
+      });
     });
 
-    let finalSessionData: any = null;
-    if (save_strategy !== 'never') { try { finalSessionData = await context.storageState(); } catch { } }
+    if (saveInterval) clearInterval(saveInterval);
+
+    // Tenta uma captura final se o browser ainda estiver vivo
+    // (Caso tenha fechado por page close mas o browser ainda esteja healthy)
+    await tryCaptureSession('final-check');
+
+    let finalSessionData = lastGoodSessionData;
+
+    if (IS_DEV || is_debug) {
+      // Mantendo debug a pedido do usuário
+    }
 
     if (browser && browser.isConnected()) await browser.close();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app-closed", args.id);
