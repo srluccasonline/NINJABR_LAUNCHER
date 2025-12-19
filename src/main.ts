@@ -204,12 +204,6 @@ ipcMain.handle('launch-app', async (event, args) => {
     context.setDefaultTimeout(60000); // 60 segundos de timeout global
 
     // =================================================================
-    // ZERO-DELAY UI LOCK - REMOVIDO addInitScript para evitar travamentos
-    // =================================================================
-    // Bloqueios de teclado movidos para o injectBrowserScript (page.evaluate)
-    // Bloqueio de contextmenu removido a pedido do usuário para não travar downloads
-
-    // =================================================================
     // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
     // =================================================================
     if (!is_debug) {
@@ -288,20 +282,53 @@ ipcMain.handle('launch-app', async (event, args) => {
       await context.route('chrome-extension://**', route => route.abort());
       await context.route('edge-extension://**', route => route.abort());
 
-      // FIX: Aplicando bloqueios personalizados do frontend (url_blocks)
+      // FIX 1: Bypass de CSP para o Google (Restaurado para garantir injeção de estilos)
+      await context.route('**/*google.com/*', async route => {
+        try {
+          const response = await route.fetch();
+          const headers = response.headers();
+          delete headers['content-security-policy'];
+          delete headers['x-frame-options'];
+          await route.fulfill({ response, headers });
+        } catch (e) {
+          await route.continue().catch(() => { });
+        }
+      });
+
+      // FIX 2: Bloqueios personalizados do frontend (url_blocks)
+      // Registrados DEPOIS do CSP bypass para que o bloqueio ganhe do bypass se houver conflito (Playwright order: last wins)
       if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
         if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
-        for (const pattern of normalizedUrlBlocks) {
+
+        for (const raw of normalizedUrlBlocks) {
           try {
-            // REVERTIDO: Usa exatamente o que o front mandou.
-            // Se o usuário mandou "meusite.com", bloqueia isso. 
-            // Se mandou "*.meusite.com", bloqueia aquilo. Sem mágica.
-            await context.route(pattern, async (route) => {
-              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada: ${route.request().url()}`);
-              await route.abort();
-            });
+            if (raw.includes('*')) {
+              // Modo Avançado: Usa o glob literal do usuário
+              await context.route(raw, route => {
+                if (IS_DEV) console.log(`🚫 [BLOCKED] Glob customizado: ${route.request().url()}`);
+                route.abort();
+              });
+            } else {
+              // MODO RIGIDO (facebook.com): Bloqueia domínio e subdomínios automaticamente
+              let domain = raw.toLowerCase().trim();
+              if (domain.includes('://')) domain = domain.split('://')[1];
+              if (domain.includes('/')) domain = domain.split('/')[0];
+
+              // Patterns blindados: cobrem domínio raiz e qualquer subdomínio, com qualquer path/segmento (**)
+              const patterns = [
+                `*://${domain}**`,
+                `*://*.${domain}**`
+              ];
+
+              for (const p of patterns) {
+                await context.route(p, route => {
+                  if (IS_DEV) console.log(`🚫 [BLOCKED] Rígido (${p}): ${route.request().url()}`);
+                  route.abort();
+                });
+              }
+            }
           } catch (e) {
-            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${pattern}":`, e);
+            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra "${raw}":`, e);
           }
         }
       }
@@ -327,190 +354,206 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     const parsedRules = parseUblockRules(normalizedUblockRules);
 
-    const injectBrowserScript = async (p: Page) => {
-      try {
-        await p.evaluate((params) => {
-          const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
+    // FUNCAO DO SCRIPT DE INJEÇÃO (AGORA USADA NO ADDINITSCRIPT)
+    const injectionScriptContent = `
+              const params = ${JSON.stringify({
+      rules: parsedRules,
+      user: USER_EMAIL,
+      pass: USER_PASSWORD,
+      selUser: login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]',
+      selPass: password_selector || 'input[type="password"]',
+      selBtn: `button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext`,
+      isAutofill: is_autofill_enabled,
+      isDebug: is_debug
+    })
+      };
 
-          // =================================================================
-          // PASSWORD PROTECTION (BLUR & TYPE LOCK) - MOVIDO DE addInitScript PARA page.evaluate
-          // =================================================================
-          if (!isDebug) {
-            const INJECT_ID = 'ninja-resilient-blur';
+            const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
 
-            const applyMarker = (root: Node = document) => {
-              const processElement = (el: any) => {
-                try {
-                  const isPassword =
-                    el.matches('input[type="password"]') ||
-                    (el.matches('input') && (
-                      (el.name && el.name.toLowerCase().includes('pass')) ||
-                      (el.id && el.id.toLowerCase().includes('pass')) ||
-                      (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
-                      (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
-                    ));
+            // =================================================================
+            // PASSWORD PROTECTION (BLUR & TYPE LOCK)
+            // =================================================================
+            if (!isDebug) {
+              const INJECT_ID = 'ninja-resilient-blur';
 
-                  if (isPassword) {
-                    if (!el.hasAttribute('data-ninja-protected')) {
-                      el.setAttribute('data-ninja-protected', 'true');
-                    }
-                    // RE-ASSERT STYLES ALWAYS (Prevent override by JS/CSS)
-                    el.style.setProperty('filter', 'blur(8px)', 'important');
-                    el.style.setProperty('-webkit-text-security', 'disc', 'important');
-                    el.style.setProperty('text-security', 'disc', 'important');
-                    el.style.setProperty('color', 'transparent', 'important');
-                    el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
-                  }
-                  if (el.shadowRoot) applyMarker(el.shadowRoot);
-                } catch (e) { }
-              };
+              const applyMarker = (root = document) => {
+                const processElement = (el) => {
+                  try {
+                    const isPassword =
+                      el.matches('input[type="password"]') ||
+                      (el.matches('input') && (
+                        (el.name && el.name.toLowerCase().includes('pass')) ||
+                        (el.id && el.id.toLowerCase().includes('pass')) ||
+                        (el.placeholder && el.placeholder.toLowerCase().includes('pass')) ||
+                        (el.getAttribute('aria-label') && el.getAttribute('aria-label').toLowerCase().includes('pass'))
+                      ));
 
-              processElement(root);
-              const allElements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
-              allElements.forEach((el: any) => processElement(el));
-            };
-
-            if (!document.getElementById(INJECT_ID)) {
-              const style = document.createElement('style');
-              style.id = INJECT_ID;
-              style.innerHTML = `
-                html body input[type="password"], 
-                html body input[data-ninja-protected="true"] {
-                  filter: blur(8px) !important;
-                  -webkit-text-security: disc !important;
-                  text-security: disc !important;
-                  color: transparent !important;
-                  text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
-                  border: 2px solid red !important;
-                }
-                input::-ms-reveal, input::-ms-clear, input::-webkit-credentials-auto-fill-button {
-                  display: none !important;
-                }
-              `;
-              (document.head || document.documentElement).appendChild(style);
-
-              // 1. Initial Apply
-              applyMarker();
-
-              // 2. Observer (Now watching STYLE changes too)
-              const observer = new MutationObserver((mutations) => {
-                for (const m of mutations) {
-                  if (m.addedNodes.length) {
-                    m.addedNodes.forEach(node => { if (node.nodeType === 1) applyMarker(node); });
-                  }
-                  if (m.type === 'attributes' && (m.target as HTMLElement).nodeName === 'INPUT') {
-                    // Se mudar style ou type, reaplica proteção imediatamente
-                    applyMarker(m.target);
-                  }
-                }
-              });
-              observer.observe(document.documentElement, {
-                childList: true, subtree: true, attributes: true,
-                attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label', 'style']
-              });
-
-              // 3. Super Aggressive Polling (100ms)
-              setInterval(() => applyMarker(), 1000); // Scan geral lento para novos elementos
-              setInterval(() => {
-                const enforceSecurity = (root: Node = document) => {
-                  // Apenas elementos JÁ marcados para ser extremamente rápido
-                  const query = 'input[data-ninja-protected="true"]';
-                  const elements: any = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll(query) : [];
-
-                  elements.forEach((el: any) => {
-                    // 1. Força Tipo Password
-                    if (el.type !== 'password') el.type = 'password';
-
-                    // 2. Força Estilos (caso tenha sido removido via inline style)
-                    if (el.style.filter !== 'blur(8px)') {
+                    if (isPassword) {
+                      if (!el.hasAttribute('data-ninja-protected')) {
+                        el.setAttribute('data-ninja-protected', 'true');
+                      }
+                      // RE-ASSERT STYLES ALWAYS (Prevent override by JS/CSS)
                       el.style.setProperty('filter', 'blur(8px)', 'important');
                       el.style.setProperty('-webkit-text-security', 'disc', 'important');
                       el.style.setProperty('text-security', 'disc', 'important');
                       el.style.setProperty('color', 'transparent', 'important');
+                      el.style.setProperty('text-shadow', '0 0 8px rgba(0,0,0,0.5)', 'important');
                     }
-                  });
-
-                  // Recursão para Shadow DOM
-                  const all = (root as HTMLElement).querySelectorAll ? (root as HTMLElement).querySelectorAll('*') : [];
-                  all.forEach((el: any) => { if (el.shadowRoot) enforceSecurity(el.shadowRoot); });
+                    if (el.shadowRoot) applyMarker(el.shadowRoot);
+                  } catch (e) { }
                 };
-                enforceSecurity();
-              }, 100); // 100ms polling para vencer qualquer script de reveal
-            }
-          }
 
-          if (!isDebug) {
-            // Bloqueio de Atalhos de Inspeção via evaluate
-            window.addEventListener('keydown', (e) => {
-              const isInspect =
-                (e.key === 'F12') ||
-                (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
-                (e.ctrlKey && (e.key === 'u' || e.key === 'U'));
-              if (isInspect) {
-                e.preventDefault();
-                e.stopPropagation();
+                processElement(root);
+                const allElements = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                allElements.forEach((el) => processElement(el));
+              };
+
+              if (!document.getElementById(INJECT_ID)) {
+                const style = document.createElement('style');
+                style.id = INJECT_ID;
+                style.innerHTML = \`
+              html body input[type="password"], 
+              html body input[data-ninja-protected="true"] {
+                filter: blur(8px) !important;
+                -webkit-text-security: disc !important;
+                text-security: disc !important;
+                color: transparent !important;
+                text-shadow: 0 0 8px rgba(0,0,0,0.5) !important;
+                border: 2px solid red !important;
               }
-            }, true);
+              input::-ms-reveal, input::-ms-clear, input::-webkit-credentials-auto-fill-button {
+                display: none !important;
+              }
+            \`;
+            (document.head || document.documentElement).appendChild(style);
 
-            // NOTA: O menu de contexto nativo permanece ativo para permitir downloads e outras ações legítimas.
-          }
+            // 1. Initial Apply
+            applyMarker();
 
-          // =================================================================
-          // UBLOCK & AUTOFILL (EXISTENTES)
-          // =================================================================
-          if (!document.getElementById('ninja-ublock-styles')) {
-            const currentHost = window.location.hostname;
-            const activeSelectors = rules
-              .filter(r => !r.domain || currentHost.includes(r.domain))
-              .map(r => r.selector);
-
-            const cssRules = activeSelectors.join(', ');
-            if (cssRules) {
-              const style = document.createElement('style');
-              style.id = 'ninja-ublock-styles';
-              style.innerHTML = `${cssRules} { display: none !important; opacity: 0 !important; }`;
-              (document.head || document.documentElement).appendChild(style);
-            }
-          }
-
-          const win = window as any;
-          if (!win.ninjaAutofillInitialized) {
-            win.ninjaAutofillInitialized = true;
-            if (isAutofill && user && pass) {
-              let hasLoggedIn = false;
-              const interval = setInterval(() => {
-                if (hasLoggedIn) { clearInterval(interval); return; }
-                const elUser = document.querySelector(selUser) as any;
-                const elPass = document.querySelector(selPass) as any;
-                if (elUser || elPass) {
-                  if (elUser && elUser.value !== user) {
-                    elUser.value = user;
-                    elUser.dispatchEvent(new Event('input', { bubbles: true }));
-                    elUser.dispatchEvent(new Event('change', { bubbles: true }));
-                    if (!elPass) { const btn = document.querySelector(selBtn) as any; if (btn) btn.click(); }
-                  }
-                  const elPassActual = document.querySelector(selPass) as any;
-                  if (elPassActual && elPassActual.value === '') {
-                    elPassActual.value = pass;
-                    elPassActual.dispatchEvent(new Event('input', { bubbles: true }));
-                    elPassActual.dispatchEvent(new Event('change', { bubbles: true }));
-                    setTimeout(() => { elPassActual.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); }, 500);
-                    hasLoggedIn = true;
-                  }
+            // 2. Observer (Now watching STYLE changes too)
+            const observer = new MutationObserver((mutations) => {
+              for (const m of mutations) {
+                if (m.addedNodes.length) {
+                  m.addedNodes.forEach(node => { if (node.nodeType === 1) applyMarker(node); });
                 }
-              }, 2000);
-            }
+                if (m.type === 'attributes' && m.target.nodeName === 'INPUT') {
+                  // Se mudar style ou type, reaplica proteção imediatamente
+                  applyMarker(m.target);
+                }
+              }
+            });
+            observer.observe(document.documentElement, {
+              childList: true, subtree: true, attributes: true,
+              attributeFilter: ['type', 'name', 'id', 'class', 'placeholder', 'aria-label', 'style']
+            });
+
+            // 3. Super Aggressive Polling (100ms)
+            setInterval(() => applyMarker(), 1000); // Scan geral lento
+            setInterval(() => {
+              const enforceSecurity = (root = document) => {
+                const query = 'input[data-ninja-protected="true"]';
+                const elements = root.querySelectorAll ? root.querySelectorAll(query) : [];
+
+                elements.forEach((el) => {
+                  if (el.type !== 'password') el.type = 'password';
+                  if (el.style.filter !== 'blur(8px)') {
+                    el.style.setProperty('filter', 'blur(8px)', 'important');
+                    el.style.setProperty('-webkit-text-security', 'disc', 'important');
+                    el.style.setProperty('text-security', 'disc', 'important');
+                    el.style.setProperty('color', 'transparent', 'important');
+                  }
+                });
+
+                const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                all.forEach((el) => { if (el.shadowRoot) enforceSecurity(el.shadowRoot); });
+              };
+              enforceSecurity();
+            }, 100); 
           }
-        }, {
-          rules: parsedRules,
-          user: USER_EMAIL,
-          pass: USER_PASSWORD,
-          selUser: login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]',
-          selPass: password_selector || 'input[type="password"]',
-          selBtn: `button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext`,
-          isAutofill: is_autofill_enabled,
-          isDebug: is_debug
-        });
+        }
+
+        if (!isDebug) {
+          window.addEventListener('keydown', (e) => {
+            const isInspect =
+              (e.key === 'F12') ||
+              (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+              (e.ctrlKey && (e.key === 'u' || e.key === 'U'));
+            if (isInspect) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+        }
+
+        // ADICIONADO: Listeners de Foco para garantir proteção instantânea ao clicar
+        window.addEventListener('focus', (e) => {
+             if (e.target && (e.target.nodeName === 'INPUT')) {
+                 const el = e.target;
+                 // Google Specific Check
+                 const isPass = el.type === 'password' || el.name === 'Passwd' || el.name === 'password' || (el.id && el.id.includes('pass'));
+                 if (isPass) {
+                     el.setAttribute('data-ninja-protected', 'true');
+                     el.style.setProperty('filter', 'blur(8px)', 'important');
+                     el.style.setProperty('-webkit-text-security', 'disc', 'important');
+                     el.style.setProperty('text-security', 'disc', 'important');
+                     el.style.setProperty('color', 'transparent', 'important');
+                 }
+             }
+        }, true);
+
+        // =================================================================
+        // UBLOCK & AUTOFILL
+        // =================================================================
+        if (!document.getElementById('ninja-ublock-styles')) {
+          const currentHost = window.location.hostname;
+          const activeSelectors = rules
+            .filter(r => !r.domain || currentHost.includes(r.domain))
+            .map(r => r.selector);
+
+          const cssRules = activeSelectors.join(', ');
+          if (cssRules) {
+            const style = document.createElement('style');
+            style.id = 'ninja-ublock-styles';
+            style.innerHTML = \`\${cssRules} { display: none !important; opacity: 0 !important; }\`;
+            (document.head || document.documentElement).appendChild(style);
+          }
+        }
+
+        const win = window;
+        if (!win.ninjaAutofillInitialized) {
+          win.ninjaAutofillInitialized = true;
+          if (isAutofill && user && pass) {
+            let hasLoggedIn = false;
+            const interval = setInterval(() => {
+              if (hasLoggedIn) { clearInterval(interval); return; }
+              const elUser = document.querySelector(selUser);
+              const elPass = document.querySelector(selPass);
+              if (elUser || elPass) {
+                if (elUser && elUser.value !== user) {
+                  elUser.value = user;
+                  elUser.dispatchEvent(new Event('input', { bubbles: true }));
+                  elUser.dispatchEvent(new Event('change', { bubbles: true }));
+                  if (!elPass) { const btn = document.querySelector(selBtn); if (btn) btn.click(); }
+                }
+                const elPassActual = document.querySelector(selPass);
+                if (elPassActual && elPassActual.value === '') {
+                  elPassActual.value = pass;
+                  elPassActual.dispatchEvent(new Event('input', { bubbles: true }));
+                  elPassActual.dispatchEvent(new Event('change', { bubbles: true }));
+                  setTimeout(() => { elPassActual.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); }, 500);
+                  hasLoggedIn = true;
+                }
+              }
+            }, 2000);
+          }
+        }
+        `;
+
+    // FIX: Removido addInitScript (travava downloads). 
+    // Usando page.evaluate com listeners robustos para garantir persistência.
+    const injectProtection = async (p: Page) => {
+      try {
+        await p.evaluate(injectionScriptContent).catch(() => { });
       } catch (e) { }
     };
 
@@ -540,9 +583,12 @@ ipcMain.handle('launch-app', async (event, args) => {
     };
 
     context.on('page', (p) => {
-      p.on('domcontentloaded', () => injectBrowserScript(p));
-      p.on('framenavigated', () => injectBrowserScript(p));
       setupDownloadHandler(p);
+
+      // RE-INJECTION ON NAVIGATION (Fixes Redirects & SPA)
+      p.on('domcontentloaded', () => injectProtection(p));
+      p.on('framenavigated', () => injectProtection(p)); // Garante injeção em iframes e mudanças de URL
+      p.on('load', () => injectProtection(p)); // Fallback final
     });
 
     const page = await context.newPage();
