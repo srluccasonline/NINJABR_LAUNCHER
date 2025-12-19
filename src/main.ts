@@ -188,6 +188,12 @@ ipcMain.handle('launch-app', async (event, args) => {
       proxy: proxyConfig,
       viewport: null,
       locale: 'pt-BR',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+      extraHTTPHeaders: {
+        'sec-ch-ua': '"Not A;Brand";v="99", "Chromium";v="143", "Google Chrome";v="143"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+      },
       acceptDownloads: true
     };
 
@@ -311,8 +317,8 @@ ipcMain.handle('launch-app', async (event, args) => {
 
             // Escapa caracteres especiais de regex, mas deixa o * como wildcard
             // Esta regex vai cercar o domínio e garantir que www seja opcional
-            const escaped = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&'); 
-            
+            const escaped = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+
             let regexString: string;
             if (clean.includes('*')) {
               // Modo Wildcard: Converte * para .*
@@ -372,6 +378,14 @@ ipcMain.handle('launch-app', async (event, args) => {
       };
 
             const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
+
+            // =================================================================
+            // NAVIGATOR SPOOFING (Win32)
+            // =================================================================
+            try {
+              Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+              Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+            } catch (e) { }
 
             // =================================================================
             // PASSWORD PROTECTION (BLUR & TYPE LOCK)
