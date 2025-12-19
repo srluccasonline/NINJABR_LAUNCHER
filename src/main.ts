@@ -291,18 +291,17 @@ ipcMain.handle('launch-app', async (event, args) => {
       // FIX: Aplicando bloqueios personalizados do frontend (url_blocks)
       if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
         if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
-        for (const rawPattern of normalizedUrlBlocks) {
+        for (const pattern of normalizedUrlBlocks) {
           try {
-            // SMART WILDCARD: Se o usuário não passou "*", assumimos que ele quer bloquear "tudo" daquele termo.
-            // Ex: "veed.io" vira "*veed.io*" para pegar "www.veed.io", "api.veed.io", "https://veed.io/login"
-            const pattern = rawPattern.includes('*') ? rawPattern : `*${rawPattern}*`;
-
+            // REVERTIDO: Usa exatamente o que o front mandou.
+            // Se o usuário mandou "meusite.com", bloqueia isso. 
+            // Se mandou "*.meusite.com", bloqueia aquilo. Sem mágica.
             await context.route(pattern, async (route) => {
-              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada por regra customizada (${pattern}): ${route.request().url()}`);
+              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada: ${route.request().url()}`);
               await route.abort();
             });
           } catch (e) {
-            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${rawPattern}":`, e);
+            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${pattern}":`, e);
           }
         }
       }
