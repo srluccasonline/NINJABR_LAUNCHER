@@ -296,39 +296,42 @@ ipcMain.handle('launch-app', async (event, args) => {
       });
 
       // FIX 2: Bloqueios personalizados do frontend (url_blocks)
-      // Registrados DEPOIS do CSP bypass para que o bloqueio ganhe do bypass se houver conflito (Playwright order: last wins)
       if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
         if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
 
         for (const raw of normalizedUrlBlocks) {
           try {
-            if (raw.includes('*')) {
-              // Modo Avançado: Usa o glob literal do usuário
-              await context.route(raw, route => {
-                if (IS_DEV) console.log(`🚫 [BLOCKED] Glob customizado: ${route.request().url()}`);
-                route.abort();
-              });
+            let pattern = raw.trim();
+            if (!pattern) continue;
+
+            // Limpa o prefixo para a lógica de regex (protocolos e www opcionais)
+            let clean = pattern;
+            if (clean.includes('://')) clean = clean.split('://')[1];
+            if (clean.startsWith('www.')) clean = clean.substring(4);
+
+            // Escapa caracteres especiais de regex, mas deixa o * como wildcard
+            // Esta regex vai cercar o domínio e garantir que www seja opcional
+            const escaped = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&'); 
+            
+            let regexString: string;
+            if (clean.includes('*')) {
+              // Modo Wildcard: Converte * para .*
+              regexString = `^https?://(www\\.)?${escaped.replace(/\*/g, '.*')}$`;
             } else {
-              // MODO RIGIDO (facebook.com): Bloqueia domínio e subdomínios automaticamente
-              let domain = raw.toLowerCase().trim();
-              if (domain.includes('://')) domain = domain.split('://')[1];
-              if (domain.includes('/')) domain = domain.split('/')[0];
-
-              // Patterns blindados: cobrem domínio raiz e qualquer subdomínio, com qualquer path/segmento (**)
-              const patterns = [
-                `*://${domain}**`,
-                `*://*.${domain}**`
-              ];
-
-              for (const p of patterns) {
-                await context.route(p, route => {
-                  if (IS_DEV) console.log(`🚫 [BLOCKED] Rígido (${p}): ${route.request().url()}`);
-                  route.abort();
-                });
-              }
+              // Modo Rígido (Exato): Só bloqueia o que foi escrito (com slash opcional no final se for só o domínio)
+              // Ex: facebook.com bloqueia facebook.com e www.facebook.com, mas NÃO facebook.com/mensagens
+              regexString = `^https?://(www\\.)?${escaped}/?$`;
             }
+
+            const routeRegex = new RegExp(regexString, 'i');
+
+            // Registramos cada regra como uma rota individual para performance e precisão nativa do Playwright
+            await context.route(routeRegex, route => {
+              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada (Regex Match: ${pattern}): ${route.request().url()}`);
+              route.abort();
+            });
           } catch (e) {
-            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra "${raw}":`, e);
+            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${raw}":`, e);
           }
         }
       }
