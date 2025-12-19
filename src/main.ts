@@ -287,6 +287,25 @@ ipcMain.handle('launch-app', async (event, args) => {
       await context.route('edge://**', route => route.abort());
       await context.route('chrome-extension://**', route => route.abort());
       await context.route('edge-extension://**', route => route.abort());
+
+      // FIX: Aplicando bloqueios personalizados do frontend (url_blocks)
+      if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
+        if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
+        for (const rawPattern of normalizedUrlBlocks) {
+          try {
+            // SMART WILDCARD: Se o usuário não passou "*", assumimos que ele quer bloquear "tudo" daquele termo.
+            // Ex: "veed.io" vira "*veed.io*" para pegar "www.veed.io", "api.veed.io", "https://veed.io/login"
+            const pattern = rawPattern.includes('*') ? rawPattern : `*${rawPattern}*`;
+
+            await context.route(pattern, async (route) => {
+              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada por regra customizada (${pattern}): ${route.request().url()}`);
+              await route.abort();
+            });
+          } catch (e) {
+            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${rawPattern}":`, e);
+          }
+        }
+      }
     }
 
 
