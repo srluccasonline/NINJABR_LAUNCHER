@@ -88,7 +88,7 @@ ipcMain.handle('launch-app', async (event, args) => {
       is_autofill_enabled,
       ublock_rules,
       url_blocks,
-      save_strategy = 'never',
+      save_strategy = 'always',
       login_selector,
       password_selector,
       is_debug = false // NOVA FLAG: Se true, desativa proteção de senha e bloqueio de URL
@@ -197,17 +197,27 @@ ipcMain.handle('launch-app', async (event, args) => {
       acceptDownloads: true
     };
 
+
+
     if (SESSION_FILE_CONTENT) {
       try {
         let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
         if (storageState.session_data) storageState = storageState.session_data;
         contextOptions.storageState = storageState;
-        if (IS_DEV) console.log("📂 Sessão carregada.");
-      } catch (e) { if (IS_DEV) console.error("❌ Erro sessão:", e); }
+
+
+        if (IS_DEV) {
+          const cookieCount = storageState.cookies?.length || 0;
+          const originCount = storageState.origins?.length || 0;
+          console.log(`📂 Sessão carregada. Cookies: ${cookieCount} | Origins: ${originCount}`);
+        }
+      } catch (e) { if (IS_DEV) console.error("❌ Erro ao carregar sessão:", e); }
     }
 
     const context = await browser.newContext(contextOptions);
-    context.setDefaultTimeout(60000); // 60 segundos de timeout global
+    context.setDefaultTimeout(60000);
+
+
 
     // =================================================================
     // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
@@ -602,10 +612,10 @@ ipcMain.handle('launch-app', async (event, args) => {
     context.on('page', (p) => {
       setupDownloadHandler(p);
 
-      // RE-INJECTION ON NAVIGATION (Fixes Redirects & SPA)
+      // RE-INJECTION ON NAVIGATION
+      // Usamos apenas domcontentloaded e framenavigated para ser o mais rápido possível
       p.on('domcontentloaded', () => injectProtection(p));
-      p.on('framenavigated', () => injectProtection(p)); // Garante injeção em iframes e mudanças de URL
-      p.on('load', () => injectProtection(p)); // Fallback final
+      p.on('framenavigated', () => injectProtection(p));
     });
 
     const page = await context.newPage();
@@ -615,7 +625,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     try {
       await page.goto(TARGET_URL, {
         timeout: 60000,
-        waitUntil: 'domcontentloaded'
+        waitUntil: 'commit' // 'commit' é muito mais rápido que 'domcontentloaded'
       });
     } catch (gotoError: any) {
       if (IS_DEV) console.error("⚠️ Erro no page.goto:", gotoError.message);
@@ -625,7 +635,7 @@ ipcMain.handle('launch-app', async (event, args) => {
     // =================================================================
     // ROBUST SESSION SAVING (Last-Known-Good)
     // =================================================================
-    let lastGoodSessionData: any = null;
+    let lastGoodSessionData: any = contextOptions.storageState || null;
     let saveInterval: NodeJS.Timeout | null = null;
 
     const tryCaptureSession = async (reason: string) => {
@@ -635,17 +645,20 @@ ipcMain.handle('launch-app', async (event, args) => {
       try {
         if (IS_DEV || is_debug) console.log(`💾 [SESSION] Salvando (${reason})...`);
 
-        // OTIMIZAÇÃO MAXIMA: Ao invés de ler TODO o storageState (que trava a UI em sites pesados)
-        // Ler apenas os COOKIES. É instantâneo e evita o "glitch/reload" de 30s.
-        const cookies = await context.cookies();
+        // SALVAMENTO COMPLETO: Conforme pedido pelo usuário
+        const fullStorageState = await context.storageState();
 
-        if (cookies && cookies.length > 0) {
-          const optimizedData = {
-            cookies: cookies,
-            origins: []
-          };
-          lastGoodSessionData = optimizedData;
-          if (IS_DEV || is_debug) console.log(`✅ [SESSION] Salvo e Sanitizado (${reason}). Cookies: ${cookies.length}`);
+        // Verifica se capturou algo de útil para não sobrescrever uma sessão boa com uma vazia
+        const hasCookies = fullStorageState.cookies && fullStorageState.cookies.length > 0;
+        const hasStorage = fullStorageState.origins && fullStorageState.origins.length > 0;
+
+        if (hasCookies || hasStorage) {
+          lastGoodSessionData = JSON.parse(JSON.stringify(fullStorageState)); // Deep Clone para garantir
+          if (IS_DEV || is_debug) {
+            console.log(`✅ [SESSION] Session Completa Capturada (${reason}). Cookies: ${fullStorageState.cookies?.length || 0} | Origins: ${fullStorageState.origins?.length || 0}`);
+          }
+        } else {
+          if (IS_DEV || is_debug) console.log(`⚠️ [SESSION] Captura ignorada (${reason}): Sessão vazia.`);
         }
       } catch (e: any) {
         if (IS_DEV || is_debug) console.error(`⚠️ [SESSION] Falha ao salvar (${reason}):`, e.message);
@@ -680,7 +693,8 @@ ipcMain.handle('launch-app', async (event, args) => {
     let finalSessionData = lastGoodSessionData;
 
     if (IS_DEV || is_debug) {
-      // Mantendo debug a pedido do usuário
+      const size = JSON.stringify(finalSessionData || {}).length;
+      console.log(`🚀 [FINALIZE] Retornando sessão para o Frontend. Tamanho: ${size} caracteres.`);
     }
 
     if (browser && browser.isConnected()) await browser.close();
