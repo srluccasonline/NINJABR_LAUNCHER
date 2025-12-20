@@ -66,7 +66,7 @@ const createWindow = () => {
   mainWindow.on('page-title-updated', (e) => e.preventDefault());
 
   // Restaurando a URL que apontava antigamente
-  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app");
+  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app/?version=2012");
 };
 
 app.on('ready', createWindow);
