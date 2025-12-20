@@ -39,6 +39,9 @@ if (IS_DEV) {
 
 // Mantendo o limite de memória em 4GB para evitar OOM
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
+app.commandLine.appendSwitch('disable-webrtc');
+app.commandLine.appendSwitch('disable-features', 'WebRTC');
+app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
 
 if (squirrelStartup) {
   app.quit();
@@ -116,7 +119,18 @@ ipcMain.handle('launch-app', async (event, args) => {
 
     // LANÇAR NAVEGADOR
     // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
-    const launchArgs = ['--start-maximized'];
+    const launchArgs = [
+      '--start-maximized',
+      '--disable-webrtc',
+      '--disable-features=WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--enforce-webrtc-ip-permission-check',
+      '--disable-ipv6',
+      '--disable-blink-features=WebRTC',
+      // Redireciona servidores STUN para impedir descoberta de IP real via rede
+      '--host-resolver-rules=MAP stun* 0.0.0.0, MAP polyfill.io 0.0.0.0'
+    ];
     if (!is_debug) {
       launchArgs.push('--disable-devtools');
     }
@@ -171,7 +185,6 @@ ipcMain.handle('launch-app', async (event, args) => {
             url.startsWith('edge://');
 
           if (isForbidden) {
-            if (IS_DEV) console.log(`🚫 [BROWSER-CDP] Matando alvo proibido: ${url} (${type})`);
             await browserClient.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => { });
           }
         });
@@ -219,12 +232,14 @@ ipcMain.handle('launch-app', async (event, args) => {
 
 
 
+
+
     // =================================================================
     // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
     // =================================================================
     if (!is_debug) {
       try {
-        const page = await context.newPage(); // Create page first to get CDP session
+        const page = await context.newPage(); // Need one page for context-level CDP
         const client = await context.newCDPSession(page);
         await client.send('Target.setDiscoverTargets', { discover: true });
 
@@ -390,11 +405,70 @@ ipcMain.handle('launch-app', async (event, args) => {
             const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
 
             // =================================================================
+            // WEBRTC BLOCKING (STEALTH)
+            // =================================================================
+            try {
+              const noop = function() {
+                return {
+                  createOffer: () => new Promise(() => {}), // Never resolves
+                  createAnswer: () => new Promise(() => {}),
+                  setLocalDescription: () => Promise.resolve(),
+                  setRemoteDescription: () => Promise.resolve(),
+                  addIceCandidate: () => Promise.resolve(),
+                  createDataChannel: () => ({ close: () => {}, send: () => {} }),
+                  close: () => {},
+                  getConfiguration: () => ({ iceServers: [] }),
+                  addEventListener: () => {},
+                  removeEventListener: () => {},
+                  dispatchEvent: () => true,
+                  onicecandidate: null,
+                  oniceconnectionstatechange: null,
+                  onicegatheringstatechange: null,
+                  onsignalingstatechange: null,
+                  onnegotiationneeded: null,
+                  ontrack: null,
+                  onconnectionstatechange: null,
+                };
+              };
+
+              Object.defineProperties(window, {
+                'RTCPeerConnection': { value: noop, writable: false, configurable: false },
+                'webkitRTCPeerConnection': { value: noop, writable: false, configurable: false },
+                'RTCIceGatherer': { value: undefined, writable: false, configurable: false },
+                'RTCDataChannel': { value: undefined, writable: false, configurable: false },
+                'RTCSessionDescription': { value: undefined, writable: false, configurable: false },
+                'RTCIceCandidate': { value: undefined, writable: false, configurable: false }
+              });
+
+              if (navigator.mediaDevices) {
+                navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('Media access denied'));
+                navigator.mediaDevices.enumerateDevices = () => Promise.resolve([]);
+              }
+              
+              console.log('🛡️ WebRTC Neutered (Stealth Mode)');
+            } catch (e) { }
+
+            // =================================================================
             // NAVIGATOR SPOOFING (Win32)
             // =================================================================
             try {
-              Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-              Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+              const spoof = (obj, prop, value) => {
+                try {
+                  Object.defineProperty(obj, prop, {
+                    value: value,
+                    writable: false,
+                    configurable: false,
+                    enumerable: true
+                  });
+                } catch (e) {}
+              };
+
+              spoof(navigator, 'platform', 'Win32');
+              spoof(navigator, 'vendor', 'Google Inc.');
+              spoof(navigator, 'oscpu', 'Windows NT 10.0; Win64; x64');
+              spoof(navigator, 'hardwareConcurrency', 8);
+              spoof(navigator, 'deviceMemory', 8);
+              spoof(navigator, 'maxTouchPoints', 0);
             } catch (e) { }
 
             // =================================================================
@@ -609,11 +683,118 @@ ipcMain.handle('launch-app', async (event, args) => {
       });
     };
 
-    context.on('page', (p) => {
+    context.on('page', async (p) => {
       setupDownloadHandler(p);
 
+      // NATIVE SPOOFING VIA CDP (Runs for every new page/tab)
+      if (!is_debug) {
+        try {
+          const client = await p.context().newCDPSession(p);
+
+          // Enable domains needed for robust spoofing
+          await client.send('Page.enable').catch(() => { });
+          await client.send('Network.enable').catch(() => { });
+
+          // 1. Force the platform (Both domains for maximum coverage)
+          const overrideOptions = {
+            userAgent: contextOptions.userAgent,
+            platform: 'Win32',
+            userAgentMetadata: {
+              platform: 'Windows',
+              platformVersion: '10.0.0',
+              architecture: 'x86_64',
+              model: '',
+              mobile: false,
+              brands: [
+                { brand: 'Not A;Brand', version: '99' },
+                { brand: 'Chromium', version: '143' },
+                { brand: 'Google Chrome', version: '143' }
+              ]
+            }
+          };
+
+          // Enable domains needed for robust spoofing (Runtime is key for iframes)
+          await client.send('Page.enable').catch(() => { });
+          await client.send('Network.enable').catch(() => { });
+          await client.send('Runtime.enable').catch(() => { });
+
+          const spoofSource = `
+              (function() {
+                try {
+                  const spoof = (obj, prop, value) => {
+                    try {
+                      Object.defineProperty(obj, prop, {
+                        get: () => value,
+                        set: () => {},
+                        configurable: false,
+                        enumerable: true
+                      });
+                    } catch (e) {}
+                  };
+                  
+                  spoof(navigator, 'platform', 'Win32');
+                  spoof(navigator, 'oscpu', 'Windows NT 10.0; Win64; x64');
+                  spoof(navigator, 'vendor', 'Google Inc.');
+                  spoof(navigator, 'hardwareConcurrency', 8);
+                  spoof(navigator, 'deviceMemory', 8);
+                  spoof(navigator, 'maxTouchPoints', 0);
+
+                  if (navigator.userAgentData) {
+                     const orig = navigator.userAgentData.getHighEntropyValues;
+                     navigator.userAgentData.getHighEntropyValues = function(h) {
+                        return orig.call(navigator.userAgentData, h).then(v => {
+                           return Object.assign({}, v, { platform: 'Windows', platformVersion: '10.0.0' });
+                        });
+                     };
+                  }
+                } catch(e) {}
+              })();
+          `;
+
+          // 1. Force the platform (Both domains for maximum coverage)
+          const spoofOptions = {
+            userAgent: contextOptions.userAgent,
+            platform: 'Win32',
+            userAgentMetadata: {
+              platform: 'Windows',
+              platformVersion: '10.0.0',
+              architecture: 'x86_64',
+              model: '',
+              mobile: false,
+              brands: [
+                { brand: 'Not A;Brand', version: '99' },
+                { brand: 'Chromium', version: '143' },
+                { brand: 'Google Chrome', version: '143' }
+              ]
+            }
+          };
+
+          await client.send('Network.setUserAgentOverride', spoofOptions).catch(() => { });
+          await client.send('Emulation.setUserAgentOverride', spoofOptions).catch(() => { });
+
+          // 2. Persistent JS Spoofing (CDP native injection - Unblockable & Fast)
+          await client.send('Page.addScriptToEvaluateOnNewDocument', {
+            source: spoofSource
+          }).catch(() => { });
+
+          // 3. Runtime Injection (Covers dynamically created contexts/iframes instantly)
+          client.on('Runtime.executionContextCreated', async (params: any) => {
+            try {
+              const ctx = params.context;
+              // We evaluate on every new context to catch iframes
+              if (ctx) {
+                await client.send('Runtime.evaluate', {
+                  expression: spoofSource,
+                  contextId: ctx.id,
+                }).catch(() => { });
+              }
+            } catch (e) { }
+          });
+
+        } catch (e) { }
+      }
+
       // RE-INJECTION ON NAVIGATION
-      // Usamos apenas domcontentloaded e framenavigated para ser o mais rápido possível
       p.on('domcontentloaded', () => injectProtection(p));
       p.on('framenavigated', () => injectProtection(p));
     });
