@@ -68,8 +68,22 @@ const createWindow = () => {
   mainWindow.setMenu(null);
   mainWindow.on('page-title-updated', (e) => e.preventDefault());
 
-  // Restaurando a URL que apontava antigamente
-  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app/?version=2014");
+  // URL PRINCIPAL
+  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app/?version=2014").catch(() => {
+    const errorHtml = `
+      <html>
+      <head><meta charset="UTF-8"></head>
+      <body style="font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #121212; color: #e0e0e0;">
+        <div style="text-align: center; padding: 20px;">
+          <h2 style="color: #ff5252; margin-bottom: 10px;">Problema de Conexão</h2>
+          <p>Não foi possível conectar ao servidor.</p>
+          <p style="font-size: 0.9em; opacity: 0.8;">Verifique sua internet.</p>
+        </div>
+      </body>
+      </html>
+    `;
+    mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+  });
 };
 
 app.on('ready', createWindow);
