@@ -51,7 +51,9 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
     const launchArgs = [
       '--start-maximized',
       '--disable-webrtc',
-      '--disable-features=WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
+      '--disable-web-security',
+      '--allow-running-insecure-content',
+      '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       '--webrtc-ip-handling-policy=disable_non_proxied_udp',
       '--enforce-webrtc-ip-permission-check',
