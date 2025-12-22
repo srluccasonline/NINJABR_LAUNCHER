@@ -7,7 +7,8 @@ import { activeBrowsers } from './state';
 
 export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: any, mainWindow: BrowserWindow | null) => {
   if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
-  args.is_debug = true; // FORCE DEBUG MODE FOR TROUBLESHOOTING
+  if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
+  // args.is_debug = true; // REMOVED: Restore security features (PNA fix confirmed)
 
   let browser: Browser | null = null;
 
