@@ -189,7 +189,15 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
           body: request.postDataBuffer() || undefined,
         };
 
-        const response = await fetch(request.url(), fetchOptions);
+        const response = await fetch(request.url(), fetchOptions).catch(async (err) => {
+          // RETRY STRATEGY: Fallback to 'localhost' if 127.0.0.1 fails (Fixes IPv6 binding issues)
+          if (err.cause && (err.cause.code === 'ECONNREFUSED' || err.cause.code === 'EADDRNOTAVAIL')) {
+            const fallbackUrl = request.url().replace('127.0.0.1', 'localhost');
+            if (IS_DEV) console.log(`🔄 [PROXY] Tentando fallback para localhost: ${fallbackUrl}`);
+            return fetch(fallbackUrl, fetchOptions);
+          }
+          throw err;
+        });
 
         const responseHeaders: Record<string, string> = {};
         response.headers.forEach((val, key) => responseHeaders[key] = val);
