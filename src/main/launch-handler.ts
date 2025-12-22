@@ -6,336 +6,336 @@ import { chromium, IS_DEV } from './env';
 import { activeBrowsers } from './state';
 
 export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: any, mainWindow: BrowserWindow | null) => {
-    if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
+  if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
 
-    let browser: Browser | null = null;
+  let browser: Browser | null = null;
 
-    try {
-        const {
-            start_url: TARGET_URL,
-            login: USER_EMAIL,
-            password: USER_PASSWORD,
-            proxy_data,
-            session_data: SESSION_FILE_CONTENT,
-            is_autofill_enabled,
-            ublock_rules,
-            url_blocks,
-            save_strategy = 'always',
-            login_selector,
-            password_selector,
-            is_debug = false // NOVA FLAG: Se true, desativa proteção de senha e bloqueio de URL
-        } = args;
+  try {
+    const {
+      start_url: TARGET_URL,
+      login: USER_EMAIL,
+      password: USER_PASSWORD,
+      proxy_data,
+      session_data: SESSION_FILE_CONTENT,
+      is_autofill_enabled,
+      ublock_rules,
+      url_blocks,
+      save_strategy = 'always',
+      login_selector,
+      password_selector,
+      is_debug = false // NOVA FLAG: Se true, desativa proteção de senha e bloqueio de URL
+    } = args;
 
-        const normalizeInput = (input: any): string[] => {
-            if (!input) return [];
-            if (Array.isArray(input)) return input;
-            if (typeof input === 'string') return input.split('\n').map((s: string) => s.trim()).filter((s: string) => s);
-            return [];
-        };
+    const normalizeInput = (input: any): string[] => {
+      if (!input) return [];
+      if (Array.isArray(input)) return input;
+      if (typeof input === 'string') return input.split('\n').map((s: string) => s.trim()).filter((s: string) => s);
+      return [];
+    };
 
-        const normalizedUrlBlocks = normalizeInput(url_blocks);
-        const normalizedUblockRules = normalizeInput(ublock_rules);
+    const normalizedUrlBlocks = normalizeInput(url_blocks);
+    const normalizedUblockRules = normalizeInput(ublock_rules);
 
-        let proxyConfig = undefined;
-        if (proxy_data) {
-            proxyConfig = {
-                server: `${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port}`,
-                username: proxy_data.username,
-                password: proxy_data.password
-            };
-            if (IS_DEV) console.log(`🌐 [PROXY] Usando: ${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port} (User: ${proxy_data.username})`);
-        }
+    let proxyConfig = undefined;
+    if (proxy_data) {
+      proxyConfig = {
+        server: `${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port}`,
+        username: proxy_data.username,
+        password: proxy_data.password
+      };
+      if (IS_DEV) console.log(`🌐 [PROXY] Usando: ${proxy_data.protocol}://${proxy_data.host}:${proxy_data.port} (User: ${proxy_data.username})`);
+    }
 
-        // LANÇAR NAVEGADOR
-        // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
-        const launchArgs = [
-            '--start-maximized',
-            '--disable-webrtc',
-            '--disable-features=WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
-            '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-            '--webrtc-ip-handling-policy=disable_non_proxied_udp',
-            '--enforce-webrtc-ip-permission-check',
-            '--disable-ipv6',
-            '--disable-blink-features=WebRTC',
-            // Redireciona servidores STUN para impedir descoberta de IP real via rede
-            '--host-resolver-rules=MAP stun* 0.0.0.0, MAP polyfill.io 0.0.0.0'
-        ];
-        if (!is_debug) {
-            launchArgs.push('--disable-devtools');
-        }
+    // LANÇAR NAVEGADOR
+    // Removido 'channel' para usar o binário exato do PLAYWRIGHT_BROWSERS_PATH
+    const launchArgs = [
+      '--start-maximized',
+      '--disable-webrtc',
+      '--disable-features=WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--enforce-webrtc-ip-permission-check',
+      '--disable-ipv6',
+      '--disable-blink-features=WebRTC',
+      // Redireciona servidores STUN para impedir descoberta de IP real via rede
+      '--host-resolver-rules=MAP stun* 0.0.0.0, MAP polyfill.io 0.0.0.0'
+    ];
+    if (!is_debug) {
+      launchArgs.push('--disable-devtools');
+    }
 
-        if (IS_DEV || is_debug) {
-            try {
-                console.log(`📂 [DEBUG] Listando arquivos em: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
-                const files = fs.readdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH!);
-                console.log(`📄 Arquivos encontrados: ${files.join(', ')}`);
+    if (IS_DEV || is_debug) {
+      try {
+        console.log(`📂 [DEBUG] Listando arquivos em: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+        const files = fs.readdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH!);
+        console.log(`📄 Arquivos encontrados: ${files.join(', ')}`);
 
-                // Se houver subpastas (ex: chromium-1234), listar tbm
-                files.forEach((f: string) => {
-                    const subPath = path.join(process.env.PLAYWRIGHT_BROWSERS_PATH!, f);
-                    if (fs.statSync(subPath).isDirectory()) {
-                        console.log(`   📂 Dentro de ${f}: ${fs.readdirSync(subPath).join(', ')}`);
-                    }
-                });
-            } catch (e: any) {
-                console.error(`❌ [DEBUG] Erro ao listar arquivos: ${e.message}`);
-            }
-        }
-
-        browser = await chromium.launch({
-            headless: false,
-            args: launchArgs
+        // Se houver subpastas (ex: chromium-1234), listar tbm
+        files.forEach((f: string) => {
+          const subPath = path.join(process.env.PLAYWRIGHT_BROWSERS_PATH!, f);
+          if (fs.statSync(subPath).isDirectory()) {
+            console.log(`   📂 Dentro de ${f}: ${fs.readdirSync(subPath).join(', ')}`);
+          }
         });
-        activeBrowsers.add(browser);
+      } catch (e: any) {
+        console.error(`❌ [DEBUG] Erro ao listar arquivos: ${e.message}`);
+      }
+    }
 
-        // =================================================================
-        // BROWSER-LEVEL SECURITY BLOCK (DEVTOOLS KILLER) - NON-BLOCKING
-        // =================================================================
-        if (!is_debug) {
-            try {
-                const browserClient = await browser.newBrowserCDPSession();
+    browser = await chromium.launch({
+      headless: false,
+      args: launchArgs
+    });
+    activeBrowsers.add(browser);
 
-                // Ativa auto-attach para monitorar novos alvos, mas SEM pausar no nascimento (waitForDebuggerOnStart: false)
-                await browserClient.send('Target.setAutoAttach', {
-                    autoAttach: true,
-                    waitForDebuggerOnStart: false,
-                    flatten: true
-                });
+    // =================================================================
+    // BROWSER-LEVEL SECURITY BLOCK (DEVTOOLS KILLER) - NON-BLOCKING
+    // =================================================================
+    if (!is_debug) {
+      try {
+        const browserClient = await browser.newBrowserCDPSession();
 
-                browserClient.on('Target.attachedToTarget', async (params: any) => {
-                    const { targetInfo } = params;
-                    const url = targetInfo.url || '';
-                    const type = targetInfo.type;
-
-                    const isForbidden =
-                        type === 'devtools' ||
-                        url.startsWith('devtools://') ||
-                        url.startsWith('chrome://') ||
-                        url.startsWith('edge://');
-
-                    if (isForbidden) {
-                        await browserClient.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => { });
-                    }
-                });
-            } catch (e) {
-                if (IS_DEV) console.error("⚠️ Erro ao iniciar Browser-Level CDP:", e);
-            }
-        }
-
-        browser.on('disconnected', () => {
-            if (browser) activeBrowsers.delete(browser);
+        // Ativa auto-attach para monitorar novos alvos, mas SEM pausar no nascimento (waitForDebuggerOnStart: false)
+        await browserClient.send('Target.setAutoAttach', {
+          autoAttach: true,
+          waitForDebuggerOnStart: false,
+          flatten: true
         });
 
-        const contextOptions: any = {
-            proxy: proxyConfig,
-            viewport: null,
-            locale: 'pt-BR',
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-            extraHTTPHeaders: {
-                'sec-ch-ua': '"Not A;Brand";v="99", "Chromium";v="143", "Google Chrome";v="143"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-            },
-            acceptDownloads: true
+        browserClient.on('Target.attachedToTarget', async (params: any) => {
+          const { targetInfo } = params;
+          const url = targetInfo.url || '';
+          const type = targetInfo.type;
+
+          const isForbidden =
+            type === 'devtools' ||
+            url.startsWith('devtools://') ||
+            url.startsWith('chrome://') ||
+            url.startsWith('edge://');
+
+          if (isForbidden) {
+            await browserClient.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => { });
+          }
+        });
+      } catch (e) {
+        if (IS_DEV) console.error("⚠️ Erro ao iniciar Browser-Level CDP:", e);
+      }
+    }
+
+    browser.on('disconnected', () => {
+      if (browser) activeBrowsers.delete(browser);
+    });
+
+    const contextOptions: any = {
+      proxy: proxyConfig,
+      viewport: null,
+      locale: 'pt-BR',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+      extraHTTPHeaders: {
+        'sec-ch-ua': '"Not A;Brand";v="99", "Chromium";v="143", "Google Chrome";v="143"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+      },
+      acceptDownloads: true
+    };
+
+
+
+    if (SESSION_FILE_CONTENT) {
+      try {
+        let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
+        if (storageState.session_data) storageState = storageState.session_data;
+        contextOptions.storageState = storageState;
+
+
+        if (IS_DEV) {
+          const cookieCount = storageState.cookies?.length || 0;
+          const originCount = storageState.origins?.length || 0;
+          console.log(`📂 Sessão carregada. Cookies: ${cookieCount} | Origins: ${originCount}`);
+        }
+      } catch (e) { if (IS_DEV) console.error("❌ Erro ao carregar sessão:", e); }
+    }
+
+    const context = await browser.newContext(contextOptions);
+    context.setDefaultTimeout(60000);
+
+
+
+
+
+    // =================================================================
+    // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
+    // =================================================================
+    if (!is_debug) {
+      try {
+        const page = await context.newPage(); // Need one page for context-level CDP
+        const client = await context.newCDPSession(page);
+        await client.send('Target.setDiscoverTargets', { discover: true });
+
+        const checkTarget = async (targetInfo: any) => {
+          const url = targetInfo.url || '';
+          const type = targetInfo.type;
+
+          // CRITICAL: Allow downloads (type 'other' or empty URL often indicates download)
+          if (type === 'other' || (type === 'page' && url === '')) {
+            return;
+          }
+
+          const isForbidden =
+            url.startsWith('chrome://') ||
+            url.startsWith('devtools://') ||
+            url.startsWith('edge://') ||
+            (url.startsWith('about:') && url !== 'about:blank');
+
+          if (isForbidden) {
+            if (IS_DEV) console.log(`🚫 [CDP] Bloqueando alvo proibido: ${url}`);
+            try {
+              await client.send('Target.closeTarget', { targetId: targetInfo.targetId });
+            } catch (e) { /* Ignore if already closed */ }
+          }
         };
 
+        client.on('Target.targetCreated', async (params: any) => checkTarget(params.targetInfo));
 
+        // FIX: Substituindo targetInfoChanged por Polling para evitar Buffer Overflow em downloads
+        // client.on('Target.targetInfoChanged', async (params: any) => checkTarget(params.targetInfo));
 
-        if (SESSION_FILE_CONTENT) {
-            try {
-                let storageState = typeof SESSION_FILE_CONTENT === 'string' ? JSON.parse(SESSION_FILE_CONTENT) : SESSION_FILE_CONTENT;
-                if (storageState.session_data) storageState = storageState.session_data;
-                contextOptions.storageState = storageState;
-
-
-                if (IS_DEV) {
-                    const cookieCount = storageState.cookies?.length || 0;
-                    const originCount = storageState.origins?.length || 0;
-                    console.log(`📂 Sessão carregada. Cookies: ${cookieCount} | Origins: ${originCount}`);
-                }
-            } catch (e) { if (IS_DEV) console.error("❌ Erro ao carregar sessão:", e); }
-        }
-
-        const context = await browser.newContext(contextOptions);
-        context.setDefaultTimeout(60000);
-
-
-
-
-
-        // =================================================================
-        // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
-        // =================================================================
-        if (!is_debug) {
-            try {
-                const page = await context.newPage(); // Need one page for context-level CDP
-                const client = await context.newCDPSession(page);
-                await client.send('Target.setDiscoverTargets', { discover: true });
-
-                const checkTarget = async (targetInfo: any) => {
-                    const url = targetInfo.url || '';
-                    const type = targetInfo.type;
-
-                    // CRITICAL: Allow downloads (type 'other' or empty URL often indicates download)
-                    if (type === 'other' || (type === 'page' && url === '')) {
-                        return;
-                    }
-
-                    const isForbidden =
-                        url.startsWith('chrome://') ||
-                        url.startsWith('devtools://') ||
-                        url.startsWith('edge://') ||
-                        (url.startsWith('about:') && url !== 'about:blank');
-
-                    if (isForbidden) {
-                        if (IS_DEV) console.log(`🚫 [CDP] Bloqueando alvo proibido: ${url}`);
-                        try {
-                            await client.send('Target.closeTarget', { targetId: targetInfo.targetId });
-                        } catch (e) { /* Ignore if already closed */ }
-                    }
-                };
-
-                client.on('Target.targetCreated', async (params: any) => checkTarget(params.targetInfo));
-
-                // FIX: Substituindo targetInfoChanged por Polling para evitar Buffer Overflow em downloads
-                // client.on('Target.targetInfoChanged', async (params: any) => checkTarget(params.targetInfo));
-
-                const pollingInterval = setInterval(async () => {
-                    try {
-                        if (!context.pages().length && !browser?.isConnected()) {
-                            clearInterval(pollingInterval);
-                            return;
-                        }
-                        const pages = context.pages();
-                        for (const p of pages) {
-                            const url = p.url();
-                            const isForbidden =
-                                url.startsWith('chrome://') ||
-                                url.startsWith('devtools://') ||
-                                url.startsWith('edge://') ||
-                                url.startsWith('chrome-extension://') ||
-                                url.startsWith('edge-extension://');
-
-                            if (isForbidden) {
-                                if (IS_DEV) console.log(`🚫 [POLLING] Bloqueando URL proibida: ${url}`);
-                                await p.close().catch(() => { });
-                            }
-                        }
-                    } catch (e) { }
-                }, 300); // Polling Ultra-Agressivo (300ms) para fechar inspeção instantaneamente
-
-                context.on('close', () => clearInterval(pollingInterval));
-
-            } catch (e) {
-                if (IS_DEV) console.error("⚠️ Falha ao iniciar CDP:", e);
+        const pollingInterval = setInterval(async () => {
+          try {
+            if (!context.pages().length && !browser?.isConnected()) {
+              clearInterval(pollingInterval);
+              return;
             }
-        } else {
-            if (IS_DEV) console.log("⚠️ [DEBUG MODE] Proteções CDP (URL Blocking) DESATIVADAS.");
+            const pages = context.pages();
+            for (const p of pages) {
+              const url = p.url();
+              const isForbidden =
+                url.startsWith('chrome://') ||
+                url.startsWith('devtools://') ||
+                url.startsWith('edge://') ||
+                url.startsWith('chrome-extension://') ||
+                url.startsWith('edge-extension://');
+
+              if (isForbidden) {
+                if (IS_DEV) console.log(`🚫 [POLLING] Bloqueando URL proibida: ${url}`);
+                await p.close().catch(() => { });
+              }
+            }
+          } catch (e) { }
+        }, 300); // Polling Ultra-Agressivo (300ms) para fechar inspeção instantaneamente
+
+        context.on('close', () => clearInterval(pollingInterval));
+
+      } catch (e) {
+        if (IS_DEV) console.error("⚠️ Falha ao iniciar CDP:", e);
+      }
+    } else {
+      if (IS_DEV) console.log("⚠️ [DEBUG MODE] Proteções CDP (URL Blocking) DESATIVADAS.");
+    }
+
+
+
+    // =================================================================
+    // DOMAIN LOCKING (WHITELIST) - DISABLED BY USER REQUEST
+    // =================================================================
+    // =================================================================
+    // ROUTING SECURITY (FORBIDDEN URLS) - ATIVO APENAS SE NÃO FOR DEBUG
+    // =================================================================
+    if (!is_debug) {
+      await context.route('devtools://**', route => route.abort());
+      await context.route('chrome://**', route => route.abort());
+      await context.route('edge://**', route => route.abort());
+      await context.route('chrome-extension://**', route => route.abort());
+      await context.route('edge-extension://**', route => route.abort());
+
+      // FIX 1: Bypass de CSP para o Google (Restaurado para garantir injeção de estilos)
+      await context.route('**/*google.com/*', async route => {
+        try {
+          const response = await route.fetch();
+          const headers = response.headers();
+          delete headers['content-security-policy'];
+          delete headers['x-frame-options'];
+          await route.fulfill({ response, headers });
+        } catch (e) {
+          await route.continue().catch(() => { });
         }
+      });
 
+      // FIX 2: Bloqueios personalizados do frontend (url_blocks)
+      if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
+        if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
 
+        for (const raw of normalizedUrlBlocks) {
+          try {
+            const pattern = raw.trim();
+            if (!pattern) continue;
 
-        // =================================================================
-        // DOMAIN LOCKING (WHITELIST) - DISABLED BY USER REQUEST
-        // =================================================================
-        // =================================================================
-        // ROUTING SECURITY (FORBIDDEN URLS) - ATIVO APENAS SE NÃO FOR DEBUG
-        // =================================================================
-        if (!is_debug) {
-            await context.route('devtools://**', route => route.abort());
-            await context.route('chrome://**', route => route.abort());
-            await context.route('edge://**', route => route.abort());
-            await context.route('chrome-extension://**', route => route.abort());
-            await context.route('edge-extension://**', route => route.abort());
+            // Limpa o prefixo para a lógica de regex (protocolos e www opcionais)
+            let clean = pattern;
+            if (clean.includes('://')) clean = clean.split('://')[1];
+            if (clean.startsWith('www.')) clean = clean.substring(4);
 
-            // FIX 1: Bypass de CSP para o Google (Restaurado para garantir injeção de estilos)
-            await context.route('**/*google.com/*', async route => {
-                try {
-                    const response = await route.fetch();
-                    const headers = response.headers();
-                    delete headers['content-security-policy'];
-                    delete headers['x-frame-options'];
-                    await route.fulfill({ response, headers });
-                } catch (e) {
-                    await route.continue().catch(() => { });
-                }
+            // Escapa caracteres especiais de regex, mas deixa o * como wildcard
+            // Esta regex vai cercar o domínio e garantir que www seja opcional
+            const escaped = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+
+            let regexString: string;
+            if (clean.includes('*')) {
+              // Modo Wildcard: Converte * para .*
+              regexString = `^https?://(www\\.)?${escaped.replace(/\*/g, '.*')}$`;
+            } else {
+              // Modo Inteligente (Abrangente): Bloqueia domínio, subdomínios e caminhos
+              // Ex: facebook.com bloqueia facebook.com, www.facebook.com, m.facebook.com, facebook.com/path
+              regexString = `^https?://([a-zA-Z0-9-]+\\.)*${escaped}(/.*)?$`;
+            }
+
+            const routeRegex = new RegExp(regexString, 'i');
+
+            // Registramos cada regra como uma rota individual para performance e precisão nativa do Playwright
+            await context.route(routeRegex, route => {
+              if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada (Regex Match: ${pattern}): ${route.request().url()}`);
+              route.abort();
             });
-
-            // FIX 2: Bloqueios personalizados do frontend (url_blocks)
-            if (normalizedUrlBlocks && normalizedUrlBlocks.length > 0) {
-                if (IS_DEV) console.log(`🚫 [ROUTING] Bloqueando ${normalizedUrlBlocks.length} regras personalizadas.`);
-
-                for (const raw of normalizedUrlBlocks) {
-                    try {
-                        const pattern = raw.trim();
-                        if (!pattern) continue;
-
-                        // Limpa o prefixo para a lógica de regex (protocolos e www opcionais)
-                        let clean = pattern;
-                        if (clean.includes('://')) clean = clean.split('://')[1];
-                        if (clean.startsWith('www.')) clean = clean.substring(4);
-
-                        // Escapa caracteres especiais de regex, mas deixa o * como wildcard
-                        // Esta regex vai cercar o domínio e garantir que www seja opcional
-                        const escaped = clean.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-
-                        let regexString: string;
-                        if (clean.includes('*')) {
-                            // Modo Wildcard: Converte * para .*
-                            regexString = `^https?://(www\\.)?${escaped.replace(/\*/g, '.*')}$`;
-                        } else {
-                            // Modo Rígido (Exato): Só bloqueia o que foi escrito (com slash opcional no final se for só o domínio)
-                            // Ex: facebook.com bloqueia facebook.com e www.facebook.com, mas NÃO facebook.com/mensagens
-                            regexString = `^https?://(www\\.)?${escaped}/?$`;
-                        }
-
-                        const routeRegex = new RegExp(regexString, 'i');
-
-                        // Registramos cada regra como uma rota individual para performance e precisão nativa do Playwright
-                        await context.route(routeRegex, route => {
-                            if (IS_DEV) console.log(`🚫 [BLOCKED] URL interceptada (Regex Match: ${pattern}): ${route.request().url()}`);
-                            route.abort();
-                        });
-                    } catch (e) {
-                        if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${raw}":`, e);
-                    }
-                }
-            }
+          } catch (e) {
+            if (IS_DEV) console.error(`⚠️ Erro ao aplicar regra de bloqueio "${raw}":`, e);
+          }
         }
+      }
+    }
 
 
-        // =================================================================
-        // BROWSER-SIDE INJECTION
-        // =================================================================
+    // =================================================================
+    // BROWSER-SIDE INJECTION
+    // =================================================================
 
-        // 2. Regras uBlock e Autofill (Dinâmico via evaluate)
-        const parseUblockRules = (rules: string[]) => {
-            return rules.map(r => {
-                r = r.trim();
-                if (!r || r.startsWith('!')) return null;
-                if (r.includes('##')) {
-                    const [domain, selector] = r.split('##');
-                    return { domain: domain.trim(), selector: selector.trim() };
-                }
-                return { domain: '', selector: r };
-            }).filter(r => r !== null) as { domain: string, selector: string }[];
-        };
+    // 2. Regras uBlock e Autofill (Dinâmico via evaluate)
+    const parseUblockRules = (rules: string[]) => {
+      return rules.map(r => {
+        r = r.trim();
+        if (!r || r.startsWith('!')) return null;
+        if (r.includes('##')) {
+          const [domain, selector] = r.split('##');
+          return { domain: domain.trim(), selector: selector.trim() };
+        }
+        return { domain: '', selector: r };
+      }).filter(r => r !== null) as { domain: string, selector: string }[];
+    };
 
-        const parsedRules = parseUblockRules(normalizedUblockRules);
+    const parsedRules = parseUblockRules(normalizedUblockRules);
 
-        // FUNCAO DO SCRIPT DE INJEÇÃO (AGORA USADA NO ADDINITSCRIPT)
-        const injectionScriptContent = `
+    // FUNCAO DO SCRIPT DE INJEÇÃO (AGORA USADA NO ADDINITSCRIPT)
+    const injectionScriptContent = `
               const params = ${JSON.stringify({
-            rules: parsedRules,
-            user: USER_EMAIL,
-            pass: USER_PASSWORD,
-            selUser: login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]',
-            selPass: password_selector || 'input[type="password"]',
-            selBtn: 'button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext',
-            isAutofill: is_autofill_enabled,
-            isDebug: is_debug
-        })
-            };
+      rules: parsedRules,
+      user: USER_EMAIL,
+      pass: USER_PASSWORD,
+      selUser: login_selector || 'input[type="email"], input[name*="user"], input[name*="login"], input[name*="identifier"]',
+      selPass: password_selector || 'input[type="password"]',
+      selBtn: 'button:has-text("Entrar"), button:has-text("Login"), button:has-text("Avançar"), button:has-text("Next"), input[type="submit"], #identifierNext, #passwordNext',
+      isAutofill: is_autofill_enabled,
+      isDebug: is_debug
+    })
+      };
 
             const { rules, user, pass, selUser, selPass, selBtn, isAutofill, isDebug } = params;
 
@@ -585,75 +585,75 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
         }
         `;
 
-        // FIX: Removido addInitScript (travava downloads). 
-        // Usando page.evaluate com listeners robustos para garantir persistência.
-        const injectProtection = async (p: Page) => {
-            try {
-                await p.evaluate(injectionScriptContent).catch(() => { });
-            } catch (e) { }
-        };
+    // FIX: Removido addInitScript (travava downloads). 
+    // Usando page.evaluate com listeners robustos para garantir persistência.
+    const injectProtection = async (p: Page) => {
+      try {
+        await p.evaluate(injectionScriptContent).catch(() => { });
+      } catch (e) { }
+    };
 
-        // DOWNLOAD HANDLER
-        const setupDownloadHandler = (p: Page) => {
-            p.on('download', async (download: Download) => {
-                if (IS_DEV) console.log("📥 Download detectado:", download.suggestedFilename());
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
-                        title: 'Salvar Arquivo',
-                        defaultPath: path.join(app.getPath('downloads'), download.suggestedFilename()),
-                        buttonLabel: 'Salvar',
-                    });
-                    if (!canceled && filePath) {
-                        if (IS_DEV) console.log("💾 Salvando em:", filePath);
-                        await download.saveAs(filePath).catch(() => { });
-                        if (IS_DEV) console.log("✅ Download concluído.");
-                    } else {
-                        if (IS_DEV) console.log("❌ Download cancelado.");
-                        await download.cancel().catch(() => { });
-                    }
-                } else {
-                    const defaultPath = path.join(app.getPath('downloads'), download.suggestedFilename());
-                    await download.saveAs(defaultPath).catch(() => { });
-                }
-            });
-        };
+    // DOWNLOAD HANDLER
+    const setupDownloadHandler = (p: Page) => {
+      p.on('download', async (download: Download) => {
+        if (IS_DEV) console.log("📥 Download detectado:", download.suggestedFilename());
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Salvar Arquivo',
+            defaultPath: path.join(app.getPath('downloads'), download.suggestedFilename()),
+            buttonLabel: 'Salvar',
+          });
+          if (!canceled && filePath) {
+            if (IS_DEV) console.log("💾 Salvando em:", filePath);
+            await download.saveAs(filePath).catch(() => { });
+            if (IS_DEV) console.log("✅ Download concluído.");
+          } else {
+            if (IS_DEV) console.log("❌ Download cancelado.");
+            await download.cancel().catch(() => { });
+          }
+        } else {
+          const defaultPath = path.join(app.getPath('downloads'), download.suggestedFilename());
+          await download.saveAs(defaultPath).catch(() => { });
+        }
+      });
+    };
 
-        context.on('page', async (p: any) => {
-            setupDownloadHandler(p);
+    context.on('page', async (p: any) => {
+      setupDownloadHandler(p);
 
-            // NATIVE SPOOFING VIA CDP (Runs for every new page/tab)
-            if (!is_debug) {
-                try {
-                    const client = await p.context().newCDPSession(p);
+      // NATIVE SPOOFING VIA CDP (Runs for every new page/tab)
+      if (!is_debug) {
+        try {
+          const client = await p.context().newCDPSession(p);
 
-                    // Enable domains needed for robust spoofing
-                    await client.send('Page.enable').catch(() => { });
-                    await client.send('Network.enable').catch(() => { });
+          // Enable domains needed for robust spoofing
+          await client.send('Page.enable').catch(() => { });
+          await client.send('Network.enable').catch(() => { });
 
-                    // 1. Force the platform (Both domains for maximum coverage)
-                    const overrideOptions = {
-                        userAgent: contextOptions.userAgent,
-                        platform: 'Win32',
-                        userAgentMetadata: {
-                            platform: 'Windows',
-                            platformVersion: '10.0.0',
-                            architecture: 'x86_64',
-                            model: '',
-                            mobile: false,
-                            brands: [
-                                { brand: 'Not A;Brand', version: '99' },
-                                { brand: 'Chromium', version: '143' },
-                                { brand: 'Google Chrome', version: '143' }
-                            ]
-                        }
-                    };
+          // 1. Force the platform (Both domains for maximum coverage)
+          const overrideOptions = {
+            userAgent: contextOptions.userAgent,
+            platform: 'Win32',
+            userAgentMetadata: {
+              platform: 'Windows',
+              platformVersion: '10.0.0',
+              architecture: 'x86_64',
+              model: '',
+              mobile: false,
+              brands: [
+                { brand: 'Not A;Brand', version: '99' },
+                { brand: 'Chromium', version: '143' },
+                { brand: 'Google Chrome', version: '143' }
+              ]
+            }
+          };
 
-                    // Enable domains needed for robust spoofing (Runtime is key for iframes)
-                    await client.send('Page.enable').catch(() => { });
-                    await client.send('Network.enable').catch(() => { });
-                    await client.send('Runtime.enable').catch(() => { });
+          // Enable domains needed for robust spoofing (Runtime is key for iframes)
+          await client.send('Page.enable').catch(() => { });
+          await client.send('Network.enable').catch(() => { });
+          await client.send('Runtime.enable').catch(() => { });
 
-                    const spoofSource = `
+          const spoofSource = `
               (function() {
                 try {
                   const spoof = (obj, prop, value) => {
@@ -686,141 +686,141 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
               })();
           `;
 
-                    // 1. Force the platform (Both domains for maximum coverage)
-                    const spoofOptions = {
-                        userAgent: contextOptions.userAgent,
-                        platform: 'Win32',
-                        userAgentMetadata: {
-                            platform: 'Windows',
-                            platformVersion: '10.0.0',
-                            architecture: 'x86_64',
-                            model: '',
-                            mobile: false,
-                            brands: [
-                                { brand: 'Not A;Brand', version: '99' },
-                                { brand: 'Chromium', version: '143' },
-                                { brand: 'Google Chrome', version: '143' }
-                            ]
-                        }
-                    };
-
-                    await client.send('Network.setUserAgentOverride', spoofOptions).catch(() => { });
-                    await client.send('Emulation.setUserAgentOverride', spoofOptions).catch(() => { });
-
-                    // 2. Persistent JS Spoofing (CDP native injection - Unblockable & Fast)
-                    await client.send('Page.addScriptToEvaluateOnNewDocument', {
-                        source: spoofSource
-                    }).catch(() => { });
-
-                    // 3. Runtime Injection (Covers dynamically created contexts/iframes instantly)
-                    client.on('Runtime.executionContextCreated', async (params: any) => {
-                        try {
-                            const ctx = params.context;
-                            // We evaluate on every new context to catch iframes
-                            if (ctx) {
-                                await client.send('Runtime.evaluate', {
-                                    expression: spoofSource,
-                                    contextId: ctx.id,
-                                }).catch(() => { });
-                            }
-                        } catch (e) { }
-                    });
-
-                } catch (e) { }
+          // 1. Force the platform (Both domains for maximum coverage)
+          const spoofOptions = {
+            userAgent: contextOptions.userAgent,
+            platform: 'Win32',
+            userAgentMetadata: {
+              platform: 'Windows',
+              platformVersion: '10.0.0',
+              architecture: 'x86_64',
+              model: '',
+              mobile: false,
+              brands: [
+                { brand: 'Not A;Brand', version: '99' },
+                { brand: 'Chromium', version: '143' },
+                { brand: 'Google Chrome', version: '143' }
+              ]
             }
+          };
 
-            // RE-INJECTION ON NAVIGATION
-            p.on('domcontentloaded', () => injectProtection(p));
-            p.on('framenavigated', () => injectProtection(p));
-        });
+          await client.send('Network.setUserAgentOverride', spoofOptions).catch(() => { });
+          await client.send('Emulation.setUserAgentOverride', spoofOptions).catch(() => { });
 
-        const page = await context.newPage();
+          // 2. Persistent JS Spoofing (CDP native injection - Unblockable & Fast)
+          await client.send('Page.addScriptToEvaluateOnNewDocument', {
+            source: spoofSource
+          }).catch(() => { });
 
-        if (IS_DEV) console.log(`Navegando para ${TARGET_URL}...`);
-
-        try {
-            await page.goto(TARGET_URL, {
-                timeout: 60000,
-                waitUntil: 'commit' // 'commit' é muito mais rápido que 'domcontentloaded'
-            });
-        } catch (gotoError: any) {
-            if (IS_DEV) console.error("⚠️ Erro no page.goto:", gotoError.message);
-            // Não damos throw aqui para tentar manter a página aberta para o usuário ver o erro do browser
-        }
-
-        // =================================================================
-        // ROBUST SESSION SAVING (Last-Known-Good)
-        // =================================================================
-        let lastGoodSessionData: any = contextOptions.storageState || null;
-        const saveInterval: NodeJS.Timeout | null = null;
-
-        const tryCaptureSession = async (reason: string) => {
-            if (save_strategy === 'never') return;
-            if (!context || !browser || !browser.isConnected()) return;
-
+          // 3. Runtime Injection (Covers dynamically created contexts/iframes instantly)
+          client.on('Runtime.executionContextCreated', async (params: any) => {
             try {
-                if (IS_DEV || is_debug) console.log(`💾 [SESSION] Salvando (${reason})...`);
+              const ctx = params.context;
+              // We evaluate on every new context to catch iframes
+              if (ctx) {
+                await client.send('Runtime.evaluate', {
+                  expression: spoofSource,
+                  contextId: ctx.id,
+                }).catch(() => { });
+              }
+            } catch (e) { }
+          });
 
-                // SALVAMENTO COMPLETO: Conforme pedido pelo usuário
-                const fullStorageState = await context.storageState();
+        } catch (e) { }
+      }
 
-                // Verifica se capturou algo de útil para não sobrescrever uma sessão boa com uma vazia
-                const hasCookies = fullStorageState.cookies && fullStorageState.cookies.length > 0;
-                const hasStorage = fullStorageState.origins && fullStorageState.origins.length > 0;
+      // RE-INJECTION ON NAVIGATION
+      p.on('domcontentloaded', () => injectProtection(p));
+      p.on('framenavigated', () => injectProtection(p));
+    });
 
-                if (hasCookies || hasStorage) {
-                    lastGoodSessionData = JSON.parse(JSON.stringify(fullStorageState)); // Deep Clone para garantir
-                    if (IS_DEV || is_debug) {
-                        console.log(`✅ [SESSION] Session Completa Capturada (${reason}). Cookies: ${fullStorageState.cookies?.length || 0} | Origins: ${fullStorageState.origins?.length || 0}`);
-                    }
-                } else {
-                    if (IS_DEV || is_debug) console.log(`⚠️ [SESSION] Captura ignorada (${reason}): Sessão vazia.`);
-                }
-            } catch (e: any) {
-                if (IS_DEV || is_debug) console.error(`⚠️ [SESSION] Falha ao salvar (${reason}):`, e.message);
-            }
-        };
+    const page = await context.newPage();
 
-        // 1. Salvar periodicamente DESATIVADO a pedido do usuário (salvar apenas no final)
-        // if (save_strategy !== 'never') {
-        //   saveInterval = setInterval(() => tryCaptureSession('periodic'), 30000);
-        // }
+    if (IS_DEV) console.log(`Navegando para ${TARGET_URL}...`);
 
-        await new Promise<void>((resolve) => {
-            page.on('close', async () => {
-                if (IS_DEV) console.log("🚪 Página fechada.");
-                // Tento salvar uma última vez ANTES de resolver (enquanto o browser ainda existe tecnicamente)
-                await tryCaptureSession('page-close');
-                resolve();
-            });
-            browser?.on('disconnected', () => {
-                if (IS_DEV) console.log("🚪 Browser desconectado.");
-                // Aqui já é tarde demais para salvar, usamos o lastGoodSessionData
-                resolve();
-            });
-        });
-
-        if (saveInterval) clearInterval(saveInterval);
-
-        // Tenta uma captura final se o browser ainda estiver vivo
-        // (Caso tenha fechado por page close mas o browser ainda esteja healthy)
-        await tryCaptureSession('final-check');
-
-        const finalSessionData = lastGoodSessionData;
-
-        if (IS_DEV || is_debug) {
-            const size = JSON.stringify(finalSessionData || {}).length;
-            console.log(`🚀 [FINALIZE] Retornando sessão para o Frontend. Tamanho: ${size} caracteres.`);
-        }
-
-        if (browser && browser.isConnected()) await browser.close();
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app-closed", args.id);
-
-        return { success: true, session_data: finalSessionData };
-
-    } catch (error: any) {
-        if (IS_DEV) console.error("Erro:", error);
-        if (browser && browser.isConnected()) await browser.close().catch(() => { });
-        return { success: false, error: error.message };
+    try {
+      await page.goto(TARGET_URL, {
+        timeout: 60000,
+        waitUntil: 'commit' // 'commit' é muito mais rápido que 'domcontentloaded'
+      });
+    } catch (gotoError: any) {
+      if (IS_DEV) console.error("⚠️ Erro no page.goto:", gotoError.message);
+      // Não damos throw aqui para tentar manter a página aberta para o usuário ver o erro do browser
     }
+
+    // =================================================================
+    // ROBUST SESSION SAVING (Last-Known-Good)
+    // =================================================================
+    let lastGoodSessionData: any = contextOptions.storageState || null;
+    const saveInterval: NodeJS.Timeout | null = null;
+
+    const tryCaptureSession = async (reason: string) => {
+      if (save_strategy === 'never') return;
+      if (!context || !browser || !browser.isConnected()) return;
+
+      try {
+        if (IS_DEV || is_debug) console.log(`💾 [SESSION] Salvando (${reason})...`);
+
+        // SALVAMENTO COMPLETO: Conforme pedido pelo usuário
+        const fullStorageState = await context.storageState();
+
+        // Verifica se capturou algo de útil para não sobrescrever uma sessão boa com uma vazia
+        const hasCookies = fullStorageState.cookies && fullStorageState.cookies.length > 0;
+        const hasStorage = fullStorageState.origins && fullStorageState.origins.length > 0;
+
+        if (hasCookies || hasStorage) {
+          lastGoodSessionData = JSON.parse(JSON.stringify(fullStorageState)); // Deep Clone para garantir
+          if (IS_DEV || is_debug) {
+            console.log(`✅ [SESSION] Session Completa Capturada (${reason}). Cookies: ${fullStorageState.cookies?.length || 0} | Origins: ${fullStorageState.origins?.length || 0}`);
+          }
+        } else {
+          if (IS_DEV || is_debug) console.log(`⚠️ [SESSION] Captura ignorada (${reason}): Sessão vazia.`);
+        }
+      } catch (e: any) {
+        if (IS_DEV || is_debug) console.error(`⚠️ [SESSION] Falha ao salvar (${reason}):`, e.message);
+      }
+    };
+
+    // 1. Salvar periodicamente DESATIVADO a pedido do usuário (salvar apenas no final)
+    // if (save_strategy !== 'never') {
+    //   saveInterval = setInterval(() => tryCaptureSession('periodic'), 30000);
+    // }
+
+    await new Promise<void>((resolve) => {
+      page.on('close', async () => {
+        if (IS_DEV) console.log("🚪 Página fechada.");
+        // Tento salvar uma última vez ANTES de resolver (enquanto o browser ainda existe tecnicamente)
+        await tryCaptureSession('page-close');
+        resolve();
+      });
+      browser?.on('disconnected', () => {
+        if (IS_DEV) console.log("🚪 Browser desconectado.");
+        // Aqui já é tarde demais para salvar, usamos o lastGoodSessionData
+        resolve();
+      });
+    });
+
+    if (saveInterval) clearInterval(saveInterval);
+
+    // Tenta uma captura final se o browser ainda estiver vivo
+    // (Caso tenha fechado por page close mas o browser ainda esteja healthy)
+    await tryCaptureSession('final-check');
+
+    const finalSessionData = lastGoodSessionData;
+
+    if (IS_DEV || is_debug) {
+      const size = JSON.stringify(finalSessionData || {}).length;
+      console.log(`🚀 [FINALIZE] Retornando sessão para o Frontend. Tamanho: ${size} caracteres.`);
+    }
+
+    if (browser && browser.isConnected()) await browser.close();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app-closed", args.id);
+
+    return { success: true, session_data: finalSessionData };
+
+  } catch (error: any) {
+    if (IS_DEV) console.error("Erro:", error);
+    if (browser && browser.isConnected()) await browser.close().catch(() => { });
+    return { success: false, error: error.message };
+  }
 };
