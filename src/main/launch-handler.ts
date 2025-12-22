@@ -548,7 +548,21 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
                    }
                  }, 2000);
              }
-
+             // 7. UBLOCK & AUTOFILL
+             if (!document.getElementById('ninja-ublock-styles')) {
+               const currentHost = window.location.hostname;
+               const activeSelectors = rules
+                 .filter((r) => !r.domain || currentHost.includes(r.domain))
+                 .map((r) => r.selector); // removed :any
+    
+               const cssRules = activeSelectors.join(', ');
+               if (cssRules) {
+                 const style = document.createElement('style');
+                 style.id = 'ninja-ublock-styles';
+                 style.innerHTML = \`\${cssRules} { display: none !important; opacity: 0 !important; }\`;
+                 (document.head || document.documentElement).appendChild(style);
+               }
+             }
         `;
 
     // FIX: Removido addInitScript (travava downloads). 
