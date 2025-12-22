@@ -49,7 +49,7 @@ const createWindow = () => {
   mainWindow.on('page-title-updated', (e) => e.preventDefault());
 
   // URL PRINCIPAL
-  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app/?version=2016").catch(() => {
+  mainWindow.loadURL("https://ninja-hardfork-ultimo.vercel.app/?version=2017").catch(() => {
     const errorHtml = `
       <html>
       <head><meta charset="UTF-8"></head>
