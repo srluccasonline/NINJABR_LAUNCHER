@@ -15,7 +15,8 @@
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
     "download-browsers": "node scripts/download-browsers.js",
-    "postinstall": "npm run download-browsers"
+    "postinstall": "npm run download-browsers",
+    "bump": "npm version patch && git push origin master --tags"
   },
   "keywords": [],
   "author": {
