@@ -161,6 +161,43 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
     const context = await browser.newContext(contextOptions);
     context.setDefaultTimeout(60000);
 
+    // =================================================================
+    // LOCALHOST PROXY (PNA BYPASS) - ENABLED
+    // =================================================================
+    // Intercepts requests to 127.0.0.1:3992 and proxies them via Node.js
+    // This bypasses Chromium's PNA (Private Network Access) restrictions entirely.
+    await context.route(/127\.0\.0\.1:3992/, async (route) => {
+      const request = route.request();
+      if (IS_DEV) console.log(`🔄 [PROXY] Redirecionando requisição local via Node.js: ${request.url()}`);
+
+      try {
+        const fetchOptions: any = {
+          method: request.method(),
+          headers: request.headers(),
+          body: request.postDataBuffer() || undefined,
+        };
+
+        const response = await fetch(request.url(), fetchOptions);
+
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((val, key) => responseHeaders[key] = val);
+
+        // FORCE CORS ALLOWANCE
+        responseHeaders['Access-Control-Allow-Origin'] = '*';
+        responseHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
+        responseHeaders['Access-Control-Allow-Headers'] = '*';
+
+        await route.fulfill({
+          status: response.status,
+          headers: responseHeaders,
+          body: Buffer.from(await response.arrayBuffer())
+        });
+      } catch (e: any) {
+        if (IS_DEV) console.error(`❌ [PROXY] Erro no proxy local: ${e.message}`);
+        await route.abort();
+      }
+    });
+
 
 
 
