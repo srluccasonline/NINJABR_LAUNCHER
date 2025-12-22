@@ -7,6 +7,7 @@ import { activeBrowsers } from './state';
 
 export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: any, mainWindow: BrowserWindow | null) => {
   if (IS_DEV) console.log("📥 [IPC] launch-app:", args.name);
+  args.is_debug = true; // FORCE DEBUG MODE FOR TROUBLESHOOTING
 
   let browser: Browser | null = null;
 
@@ -51,9 +52,9 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
     const launchArgs = [
       '--start-maximized',
       '--disable-webrtc',
-      '--disable-web-security',
-      '--allow-running-insecure-content',
-      '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
+      '--disable-webrtc',
+      '--disable-features=WebRTC,WebRtcHideLocalIpsWithMdns,IgnoreWebRtcLocalNetworkIp',
+      '--allow-running-insecure-content', // Required for Mixed Content (HTTPS -> HTTP Localhost)
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       '--webrtc-ip-handling-policy=disable_non_proxied_udp',
       '--enforce-webrtc-ip-permission-check',
@@ -132,6 +133,7 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
       proxy: proxyConfig,
       viewport: null,
       locale: 'pt-BR',
+      ignoreHTTPSErrors: true, // Allow self-signed or mixed content issues
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
       extraHTTPHeaders: {
         'sec-ch-ua': '"Not A;Brand";v="99", "Chromium";v="143", "Google Chrome";v="143"',
@@ -171,9 +173,19 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
       if (IS_DEV) console.log(`🔄 [PROXY] Redirecionando requisição local via Node.js: ${request.url()}`);
 
       try {
+        const headers = { ...request.headers() };
+        // Cleanups
+        delete headers['host'];
+        delete headers['connection'];
+        delete headers['content-length'];
+
+        // PNA/CORS BYPASS: Spoof Origin to match the local server
+        headers['origin'] = 'http://127.0.0.1:3992';
+        headers['referer'] = 'http://127.0.0.1:3992/';
+
         const fetchOptions: any = {
           method: request.method(),
-          headers: request.headers(),
+          headers: headers,
           body: request.postDataBuffer() || undefined,
         };
 
@@ -193,7 +205,8 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
           body: Buffer.from(await response.arrayBuffer())
         });
       } catch (e: any) {
-        if (IS_DEV) console.error(`❌ [PROXY] Erro no proxy local: ${e.message}`);
+        // Log full cause for debugging
+        if (IS_DEV) console.error(`❌ [PROXY] Erro no proxy local: ${e.message}`, e.cause || e);
         await route.abort();
       }
     });
