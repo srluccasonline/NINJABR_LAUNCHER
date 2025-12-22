@@ -179,9 +179,8 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
         delete headers['connection'];
         delete headers['content-length'];
 
-        // PNA/CORS BYPASS: Spoof Origin to match the local server
-        headers['origin'] = 'http://127.0.0.1:3992';
-        headers['referer'] = 'http://127.0.0.1:3992/';
+        // FIX: Pass-through the REAL Origin/Referer so the local app recognizes the caller
+        // (Do not spoof 127.0.0.1 unless absolutely necessary)
 
         const fetchOptions: any = {
           method: request.method(),
