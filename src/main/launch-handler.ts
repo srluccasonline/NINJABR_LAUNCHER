@@ -220,6 +220,41 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
     });
 
 
+    // =================================================================
+    // CDN PROXY (FIX SOCKET.IO)
+    // =================================================================
+    // Proxy cdn.socket.io via Node.js to ensure loading (Bypasses Proxy/Network issues)
+    await context.route(/.*cdn\.socket\.io.*/, async (route) => {
+      const request = route.request();
+      if (IS_DEV) console.log(`🔄 [PROXY] Redirecionando CDN socket.io via Node.js: ${request.url()}`);
+
+      try {
+        const headers = { ...request.headers() };
+        delete headers['host'];
+        delete headers['connection'];
+
+        const response = await fetch(request.url(), {
+          method: request.method(),
+          headers: headers
+        });
+
+        const responseHeaders: Record<string, string> = {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': response.headers.get('content-type') || 'application/javascript'
+        };
+
+        await route.fulfill({
+          status: response.status,
+          headers: responseHeaders,
+          body: Buffer.from(await response.arrayBuffer())
+        });
+      } catch (e: any) {
+        if (IS_DEV) console.error(`❌ [PROXY] Erro CDN: ${e.message}`);
+        route.continue();
+      }
+    });
+
+
 
 
 
