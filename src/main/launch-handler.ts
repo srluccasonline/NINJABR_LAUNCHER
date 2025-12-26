@@ -261,9 +261,11 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
     // =================================================================
     // CDP SECURITY (URL BLOCKING) - ATIVO APENAS SE NÃO FOR DEBUG
     // =================================================================
+    let page: Page | null = null;
     if (!is_debug) {
       try {
-        const page = await context.newPage(); // Need one page for context-level CDP
+        page = await context.newPage(); // Need one page for context-level CDP
+
         const client = await context.newCDPSession(page);
         await client.send('Target.setDiscoverTargets', { discover: true });
 
@@ -694,7 +696,7 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
       });
     };
 
-    context.on('page', async (p: Page) => {
+    const setupPage = async (p: Page) => {
       setupDownloadHandler(p);
 
       // NATIVE SPOOFING VIA CDP (Runs for every new page/tab)
@@ -810,9 +812,14 @@ export const handleLaunchApp = async (event: Electron.IpcMainInvokeEvent, args: 
         p.frames().forEach((f: Frame) => injectProtection(f));
       });
       p.on('framenavigated', (f: Frame) => injectProtection(f));
-    });
+    };
+    context.on('page', setupPage);
 
-    const page = await context.newPage();
+    if (!page) {
+      page = await context.newPage();
+    } else {
+      await setupPage(page);
+    }
 
     if (IS_DEV) console.log(`Navegando para ${TARGET_URL}...`);
 
